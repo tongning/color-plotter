@@ -3,7 +3,7 @@
 const PEN_DOWN = ["M280 P0 S115", "G4 P25"];
 const PEN_UP = ["M280 P0 S95", "G4 P25"];
 const JOB_START = ["M280 P0 S95", "G4 P60", "G28 ; home axes with the pen lifted"];
-const JOB_END = ["M280 P0 S50", "G4 P40", "G28", "M84"];
+const JOB_END = ["T-1", "G28", "M84"];
 
 const MARKER_PALETTE_KEY = "smallPlotter.markerPalette.v1";
 let markerPalette = PlotterColor.DEFAULT_PALETTE.slice();

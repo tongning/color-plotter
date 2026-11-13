@@ -34,7 +34,7 @@ M280 P0 S95
 G4 P25
 ```
 
-Every job uses absolute positioning, lifts the pen and homes before drawing, then finishes with the park/home/disable sequence:
+Every job uses absolute positioning, lifts the pen and homes before drawing, then unmounts the pen with `T-1`, homes, and disables the motors:
 
 ```gcode
 G90
@@ -42,8 +42,7 @@ M280 P0 S95
 G4 P60
 G28
 ...
-M280 P0 S50
-G4 P40
+T-1
 G28
 M84
 ```
@@ -66,6 +65,6 @@ The importer supports paths (including curves and separate subpaths), rectangles
 
 Convert text and symbols to paths before importing. Gradients, patterns, embedded images, clipping, masks, filters, dashed strokes and arrow markers are rejected with an explanatory message. Imports are limited to 2 MB, 500 generated strokes and 50,000 sampled points. Scripts and event handlers are stripped, and SVG processing is isolated from the app with external resources blocked.
 
-Jobs lift the pen, wait for queued moves with `M400`, select the required marker using `T0`–`T7`, then lift the pen again before traveling to the next path. Adjacent paths using the same marker share one tool selection. The existing pen-servo and homing commands still apply; the Duet must have the corresponding tools and tool-change macros configured. Monochrome drawings without stored color use `T0`. Colors survive gallery saves, remixes, undo and erasing.
+Jobs lift the pen, wait for queued moves with `M400`, select the required marker using `T0`–`T7`, then lift the pen again before traveling to the next path. Adjacent paths using the same marker share one tool selection. The final machine commands are exactly `T-1`, `G28`, and `M84`; the previous servo park commands are no longer emitted. Pen-servo commands still lift and lower the pen during drawing; the Duet must have the corresponding tools and tool-change macros configured. Monochrome drawings without stored color use `T0` and end with the same unmount/home/motors-off sequence. Colors survive gallery saves, remixes, undo and erasing.
 
 Run the algorithm checks with `node --test tests/color.test.cjs` and the isolated gallery API test with `node --test tests/server.test.mjs`. Open `tests/browser.html` through the local server to run browser checks for conversion, color persistence, previews and generated tool changes. These checks do not contact the plotter.

@@ -44,6 +44,7 @@ document.querySelector('#app').onload = async ({ target }) => {
     check(!w.hacked && !w.document.querySelector('iframe'), 'Imported script and event attributes never execute; temporary frame is removed');
     evaluate(`state.strokes = ['#e53935','#e53935','#3367d6','#e53935'].map((color,i) => Object.assign([{x:.1,y:.1+i*.15},{x:.8,y:.1+i*.15}], {color,shape:true}));`);
     let gcode = w.generateGcode();
+    check(gcode.endsWith('T-1\nG28\nM84\n; End of Small Plotter job\n') && gcode.match(/^T-1$/gm)?.length === 1, 'Job unmounts the pen once, then homes and disables motors');
     check(JSON.stringify(gcode.match(/^T\d+/gm)) === JSON.stringify(['T1','T6','T1']), 'G-code selects first marker and changes tools only when needed');
     check(/M280 P0 S95\nG4 P25\nM400[^\n]*\nT6[^\n]*\nM280 P0 S95/.test(gcode), 'Tool change waits for moves and lifts pen before and after selection');
     check(evaluate('serializeStrokes(deserializeStrokes(serializeStrokes(state.strokes)))[0].color') === '#e53935', 'Color survives gallery serialization round trip');
@@ -51,6 +52,7 @@ document.querySelector('#app').onload = async ({ target }) => {
     check(evaluate('eraseStrokeAt(state.strokes[0], {x:.4,y:.1}).every(piece => piece.color === "#e53935")'), 'Eraser fragments retain color');
     evaluate('state.strokes = [[{x:0,y:0},{x:1,y:1}]]');
     check(/^T0\b/m.test(w.generateGcode()), 'Legacy monochrome drawings use T0');
+    check(w.generateGcode().endsWith('T-1\nG28\nM84\n; End of Small Plotter job\n'), 'Monochrome jobs also unmount before homing and disabling motors');
     w.document.querySelector('[data-marker="6"]').click();
     check(w.document.querySelector('#activeMarkerLabel').textContent === 'Drawing with T6', 'Marker selection updates the UI');
     const premade = w.parsePremadeGcode('T1\nG0 X0 Y0\nG1 X10 Y10\nT6\nG0 X10 Y0\nG1 X0 Y10');
