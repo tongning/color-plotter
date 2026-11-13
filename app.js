@@ -361,9 +361,20 @@ function generateGcode() {
     ...JOB_START,
   ];
 
+  // Group by the physical marker after color matching. Keep first-use tool
+  // order and the original path order within each group, without editing the
+  // canvas strokes or undo history.
+  const toolGroups = new Map();
+  for (const stroke of state.strokes) {
+    const tool = toolForStroke(stroke);
+    if (!toolGroups.has(tool)) toolGroups.set(tool, []);
+    toolGroups.get(tool).push(stroke);
+  }
+  const groupedStrokes = Array.from(toolGroups.values()).flat();
+
   let penPosition = null;
   let selectedTool = null;
-  state.strokes.forEach((originalStroke, index) => {
+  groupedStrokes.forEach((originalStroke, index) => {
     const tool = toolForStroke(originalStroke);
     if (tool !== selectedTool) {
       penUp(lines);
