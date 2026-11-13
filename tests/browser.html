@@ -1,0 +1,83 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Color plotter browser checks</title>
+<style>body{margin:0}iframe{width:100%;height:1100px;border:0}pre{white-space:pre-wrap;padding:16px;background:#eff8ef}</style>
+<pre id="results">Running…</pre>
+<iframe id="app" src="../index.html"></iframe>
+<script>
+const output = document.querySelector('#results');
+const results = [];
+if (new URLSearchParams(location.search).has('preview')) { output.style.display = 'none'; document.querySelector('#app').style.height = '1400px'; }
+function check(condition, message) { if (!condition) throw new Error(message); results.push('PASS ' + message); }
+document.querySelector('#app').onload = async ({ target }) => {
+  const w = target.contentWindow;
+  const evaluate = (code) => w.eval(code);
+  const svg = (body, attributes = '') => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" ${attributes}>${body}</svg>`;
+  const convert = (text) => w.PlotterColor.importSvg(text, w.hatchStrokes);
+  try {
+    check(w.document.querySelectorAll('.marker-select').length === 8, 'Eight marker controls initialize');
+    check(w.PlotterColor.nearestTool('#ee3030', w.PlotterColor.DEFAULT_PALETTE) === 1, 'Near-red maps to red marker');
+    let paths = await convert(svg('<g transform="translate(10 20) scale(.5)" fill="none" stroke="red"><path d="M0 0 L100 100"/></g>'));
+    check(paths.length === 1 && paths[0].color === '#ff0000', 'Inherited SVG stroke color is retained');
+    check(Math.abs(paths[0][0].x - .1) < .001 && Math.abs(paths[0][0].y - .2) < .001 && Math.abs(paths[0].at(-1).x - .6) < .001, 'Nested SVG transforms preserve position');
+    paths = await convert(svg('<path fill="none" stroke="blue" d="M0 0L10 0 m40 50 l10 0"/>'));
+    check(paths.length === 2 && paths[1][0].x === .5, 'Relative compound subpaths stay separate');
+    paths = await convert(svg('<path fill="red" fill-rule="evenodd" d="M0 0H100V100H0Z M25 25H75V75H25Z"/>'));
+    check(paths.length > 0 && paths.every(p => p.color === '#ff0000'), 'Solid fills create colored hatch paths');
+    check(paths.every(p => { const m = {x:(p[0].x+p[1].x)/2,y:(p[0].y+p[1].y)/2}; return !(m.x > .26 && m.x < .74 && m.y > .26 && m.y < .74); }), 'Even-odd fill holes remain empty');
+    paths = await convert(svg('<style>.ink{stroke:#00a7b5;fill:none}</style><circle class="ink" cx="50" cy="50" r="20"/><g display="none"><path stroke="red" d="M0 0L50 50"/></g>'));
+    check(paths.length === 1 && paths[0].color === '#00a7b5', 'CSS colors work and hidden shapes are skipped');
+    paths = await convert('<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><path stroke="red" d="M0 0L200 100" fill="none"/></svg>');
+    check(Math.abs(paths[0][0].y-.25)<.001 && Math.abs(paths[0].at(-1).y-.75)<.001, 'SVG without viewBox fits and centers with its aspect ratio');
+    paths = await convert(svg('<path fill="none" stroke="blue" d="M-50 50L150 50"/>'));
+    check(paths[0][0].x === 0 && paths[0].at(-1).x === 1, 'Out-of-bed paths are clipped');
+    for (const [body, label] of [
+      ['<text x="0" y="20">Hi</text>', 'Unsupported text reports an error'],
+      ['<defs><linearGradient id="g"><stop stop-color="red"/></linearGradient></defs><rect width="100" height="100" fill="url(#g)"/>', 'Unsupported gradients report an error'],
+      ['<path fill="none" stroke="red" stroke-dasharray="2 2" d="M0 0L100 100"/>', 'Dashed paths report an error']
+    ]) {
+      let rejected = false;
+      try { await convert(svg(body)); } catch { rejected = true; }
+      check(rejected, label);
+    }
+    paths = await convert(svg('<script>parent.hacked=true<\/script><path onload="parent.hacked=true" stroke="red" fill="none" d="M0 0L100 100"/>'));
+    check(!w.hacked && !w.document.querySelector('iframe'), 'Imported script and event attributes never execute; temporary frame is removed');
+    evaluate(`state.strokes = ['#e53935','#e53935','#3367d6','#e53935'].map((color,i) => Object.assign([{x:.1,y:.1+i*.15},{x:.8,y:.1+i*.15}], {color,shape:true}));`);
+    let gcode = w.generateGcode();
+    check(JSON.stringify(gcode.match(/^T\d+/gm)) === JSON.stringify(['T1','T6','T1']), 'G-code selects first marker and changes tools only when needed');
+    check(/M280 P0 S95\nG4 P25\nM400[^\n]*\nT6[^\n]*\nM280 P0 S95/.test(gcode), 'Tool change waits for moves and lifts pen before and after selection');
+    check(evaluate('serializeStrokes(deserializeStrokes(serializeStrokes(state.strokes)))[0].color') === '#e53935', 'Color survives gallery serialization round trip');
+    check(evaluate('cloneStrokes(state.strokes)[0].color') === '#e53935', 'Undo clones retain stroke color');
+    check(evaluate('eraseStrokeAt(state.strokes[0], {x:.4,y:.1}).every(piece => piece.color === "#e53935")'), 'Eraser fragments retain color');
+    evaluate('state.strokes = [[{x:0,y:0},{x:1,y:1}]]');
+    check(/^T0\b/m.test(w.generateGcode()), 'Legacy monochrome drawings use T0');
+    w.document.querySelector('[data-marker="6"]').click();
+    check(w.document.querySelector('#activeMarkerLabel').textContent === 'Drawing with T6', 'Marker selection updates the UI');
+    const premade = w.parsePremadeGcode('T1\nG0 X0 Y0\nG1 X10 Y10\nT6\nG0 X10 Y0\nG1 X0 Y10');
+    check(premade.length === 2 && premade[0].color === '#e53935' && premade[1].color === '#3367d6', 'Premade G-code tool changes preserve marker colors');
+    const fileInput = w.document.querySelector('#svgFile');
+    const transfer = new w.DataTransfer();
+    transfer.items.add(new w.File([svg('<path fill="none" stroke="red" d="M10 10L90 90"/><path fill="none" stroke="blue" d="M10 90L90 10"/>')], 'two-colors.svg', {type:'image/svg+xml'}));
+    fileInput.files = transfer.files;
+    await new Promise((resolve, reject) => {
+      const status = w.document.querySelector('#svgImportStatus');
+      const observer = new w.MutationObserver(() => {
+        if (!w.document.querySelector('#importSvgButton').disabled) { observer.disconnect(); resolve(); }
+      });
+      observer.observe(status, {childList:true,subtree:true});
+      fileInput.dispatchEvent(new w.Event('change', {bubbles:true}));
+    });
+    check(evaluate('state.strokes.length') === 2 && w.document.querySelector('#svgImportStatus').textContent.includes('2 markers'), 'Choosing a color SVG opens an editable preview with two markers');
+    check(JSON.stringify(w.generateGcode().match(/^T\d+/gm)) === JSON.stringify(['T1','T6']), 'File import produces the expected marker changes');
+    check(w.document.querySelector('#viewDraw').classList.contains('hidden') === false, 'Successful SVG import opens drawing view');
+    w.showView('draw');
+    evaluate(`state.strokes = ['#e53935','#3367d6','#2e9d52'].map((color,i) => Object.assign([{x:.15,y:.2+i*.25},{x:.8,y:.2+i*.25}], {color,shape:true})); render();updateUi();`);
+    check(w.document.querySelectorAll('.color-assignment').length === 3, 'Preview displays source-to-marker assignments');
+    output.textContent = results.join('\n');
+    document.body.dataset.testResult = 'passed';
+  } catch (error) {
+    output.textContent = results.join('\n') + '\nFAIL ' + error.stack;
+    document.body.dataset.testResult = 'failed';
+  }
+};
+</script>

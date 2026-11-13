@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f2f4f8" />
+    <title>Small Plotter</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="./" aria-label="Small Plotter home">
+        <span class="brand-emoji" aria-hidden="true">🖊️</span>
+        <span>Small Plotter</span>
+      </a>
+
+      <div class="topbar-actions">
+        <button class="ghost" id="logsButton" type="button" title="Application logs" aria-expanded="false" aria-controls="logsPanel">📜</button>
+        <button class="ghost" id="adminButton" type="button" title="Machine control" aria-expanded="false" aria-controls="adminPanel">⚙️</button>
+      </div>
+    </header>
+
+    <div class="admin-panel hidden" id="adminPanel" aria-hidden="true">
+      <h3>Admin</h3>
+
+      <div class="admin-lock" id="adminLock">
+        <label for="adminPassword">Password</label>
+        <div class="admin-lock-row">
+          <input id="adminPassword" class="text-input" type="password" placeholder="Admin password" autocomplete="off" />
+          <button id="adminUnlock" type="button">Unlock</button>
+        </div>
+      </div>
+
+      <div class="admin-content hidden" id="adminContent">
+      <div class="machine-status" id="machineStatus" aria-live="polite">
+        <span class="status-dot"></span>
+        <span id="statusText">Not connected</span>
+      </div>
+
+      <section class="admin-section">
+        <div class="section-heading">
+          <p class="eyebrow">Duet connection</p>
+          <button class="test-button" id="testButton" type="button">Test</button>
+        </div>
+        <label for="duetEndpoint">Board address</label>
+        <input id="duetEndpoint" class="text-input mono-input" type="url" inputmode="url" value="http://miniplotter.local" placeholder="http://miniplotter.local" autocomplete="url" spellcheck="false" />
+        <label for="duetPassword">Password <span>(optional)</span></label>
+        <input id="duetPassword" class="text-input" type="password" placeholder="Only if your Duet requires one" autocomplete="current-password" />
+        <p class="connection-note">Upload destination: <code>0:/gcodes/small-plotter.gcode</code> · each job replaces the previous file</p>
+      </section>
+
+      <section class="admin-section">
+        <p class="eyebrow">Tool colors</p>
+        <p class="connection-note">Match each swatch to the marker loaded in that tool. SVG colors use the closest match.</p>
+        <div class="marker-palette marker-configuration" id="markerConfiguration" role="group" aria-label="Configure tool colors"></div>
+      </section>
+
+      <section class="admin-section">
+        <div class="section-heading">
+          <p class="eyebrow">Drawing area</p>
+          <button class="test-button" id="drawingAreaReset" type="button">Reset</button>
+        </div>
+        <div class="dimension-inputs">
+          <label>Width<input id="workWidth" class="number-input" type="number" min="1" max="1000" value="118" step="1" /><span>mm</span></label>
+          <label>Height<input id="workHeight" class="number-input" type="number" min="1" max="1000" value="118" step="1" /><span>mm</span></label>
+        </div>
+        <label for="drawFeed">Drawing speed <output id="drawFeedValue">18000 mm/min</output></label>
+        <input id="drawFeed" class="range-input" type="range" min="1000" max="24000" value="18000" step="500" />
+        <label for="travelFeed">Travel speed <output id="travelFeedValue">30000 mm/min</output></label>
+        <input id="travelFeed" class="range-input" type="range" min="1000" max="36000" value="30000" step="500" />
+      </section>
+
+      <section class="admin-section">
+        <div class="section-heading">
+          <p class="eyebrow">Selfie defaults</p>
+          <button class="test-button" id="selfieDefaultsReset" type="button">Reset</button>
+        </div>
+        <div class="selfie-defaults-grid">
+          <label>Lines<input id="defLines" class="number-input" type="number" min="10" max="45" step="1" /></label>
+          <label>Max lines<input id="maxLines" class="number-input" type="number" min="10" max="60" step="1" /></label>
+          <label>Amplitude<input id="defAmp" class="number-input" type="number" min="0.1" max="1.5" step="0.1" /></label>
+          <label>Max amplitude<input id="maxAmp" class="number-input" type="number" min="0.1" max="3" step="0.1" /></label>
+          <label>Frequency<input id="defFreq" class="number-input" type="number" min="20" max="100" step="1" /></label>
+          <label>Brightness<input id="defBright" class="number-input" type="number" min="-100" max="100" step="1" /></label>
+          <label>Contrast<input id="defContrast" class="number-input" type="number" min="-100" max="100" step="1" /></label>
+          <label>Modulation<select id="defMod" class="mod-select"><option value="both">Both</option><option value="AM">AM</option><option value="FM">FM</option></select></label>
+          <label>Size %<input id="defSize" class="number-input" type="number" min="25" max="100" step="5" /></label>
+        </div>
+        <p class="connection-note">Applied when a selfie is taken. Defaults are limited by the maxima. Reset restores the factory values.</p>
+      </section>
+
+      <section class="admin-section">
+        <p class="eyebrow">Saved drawings</p>
+        <label class="toggle-row" for="galleryDeleteMode">
+          <input id="galleryDeleteMode" type="checkbox" />
+          <span class="toggle-ui" aria-hidden="true"></span>
+          <span>Show delete buttons</span>
+        </label>
+        <button class="danger-button" id="deleteAllDrawings" type="button">Delete all saved drawings</button>
+        <p class="connection-note">Delete controls appear in the public drawings gallery while this panel stays unlocked.</p>
+      </section>
+
+      <section class="admin-section">
+        <p class="eyebrow">Job</p>
+        <label class="toggle-row" for="startAfterUpload">
+          <input id="startAfterUpload" type="checkbox" checked />
+          <span class="toggle-ui" aria-hidden="true"></span>
+          <span>Start after upload</span>
+        </label>
+        <div class="admin-actions">
+          <button id="gcodeButton" type="button" aria-expanded="false" aria-controls="gcodePanel"><span class="code-icon">&lt;/&gt;</span> G-code</button>
+          <button id="downloadButton" type="button" disabled><span class="download-icon">↓</span> Save .gcode</button>
+        </div>
+      </section>
+      </div>
+    </div>
+
+    <main class="stage">
+      <section class="view" id="viewSplash">
+        <h2 class="splash-title">Plot something</h2>
+        <div class="splash-buttons">
+          <button class="splash-btn" id="goDraw" type="button"><span class="splash-emoji">✏️</span> Draw a picture</button>
+          <button class="splash-btn" id="goSvg" type="button"><span class="splash-emoji">🎨</span> Import a color SVG</button>
+          <button class="splash-btn" id="goSelfie" type="button"><span class="splash-emoji">🤳</span> Take a selfie</button>
+          <button class="splash-btn" id="goPremade" type="button"><span class="splash-emoji">🖼️</span> Pick a premade picture</button>
+        </div>
+      </section>
+
+      <section class="view hidden" id="viewDraw">
+        <div class="view-top">
+          <button class="ghost" id="backFromDraw" type="button">← Back</button>
+          <button id="importSvgButton" type="button">Import SVG</button>
+        </div>
+
+        <section class="marker-panel" aria-label="Drawing markers">
+          <div class="marker-heading"><strong>Draw with a marker</strong><span id="activeMarkerLabel">Drawing with T0</span></div>
+          <p class="marker-help">Select a marker for new strokes.</p>
+          <div class="marker-palette" id="markerPalette" role="group" aria-label="Eight plotter markers"></div>
+          <p class="marker-help" id="svgImportStatus" role="status">SVG colors are matched to the closest marker. Solid fills become hatch lines.</p>
+          <div class="color-mapping" id="colorMapping" aria-label="Drawing color assignments"></div>
+        </section>
+        <input id="svgFile" class="hidden" type="file" accept=".svg,image/svg+xml" aria-label="Choose a color SVG" />
+
+        <div class="squiggle-panel hidden" id="squigglePanel">
+          <label>Lines <input type="range" id="sqLines" min="10" max="60" step="1" value="40" /><output id="sqLinesValue">40</output></label>
+          <label>Frequency <input type="range" id="sqFreq" min="20" max="100" step="1" value="60" /><output id="sqFreqValue">60</output></label>
+          <label>Amplitude <input type="range" id="sqAmp" min="0.1" max="3" step="0.1" value="1.5" /><output id="sqAmpValue">1.5</output></label>
+          <label>Brightness <input type="range" id="sqBright" min="-100" max="100" step="1" value="0" /><output id="sqBrightValue">0</output></label>
+          <label>Contrast <input type="range" id="sqContrast" min="-100" max="100" step="1" value="0" /><output id="sqContrastValue">0</output></label>
+          <label>Size % <input type="range" id="sqSize" min="25" max="100" step="5" value="100" /><output id="sqSizeValue">100</output></label>
+          <label>Modulation <select id="sqMod" class="mod-select"><option value="both" selected>Both</option><option value="AM">AM</option><option value="FM">FM</option></select><output></output></label>
+          <label class="toggle-row squiggle-bg-row hidden" id="removeBgRow" for="removeBackground">
+            <input id="removeBackground" type="checkbox" />
+            <span class="toggle-ui" aria-hidden="true"></span>
+            <span>Remove background</span>
+          </label>
+          <div class="sq-reset-row"><button id="sqReset" type="button">↺ Reset settings</button></div>
+        </div>
+
+        <div class="saved-drawing-banner hidden" id="savedDrawingBanner">
+          <p id="savedDrawingAttribution"></p>
+          <span id="savedDrawingPrints"></span>
+        </div>
+
+        <div class="plotting-bed" id="plottingBed">
+          <div class="corner-mark top-left"></div><div class="corner-mark top-right"></div>
+          <div class="corner-mark bottom-left"></div><div class="corner-mark bottom-right"></div>
+          <canvas id="drawCanvas" aria-label="Drawing canvas. Drag or draw with your pen, mouse, or touch."></canvas>
+        </div>
+
+        <div class="drawing-tools" id="drawingTools" role="toolbar" aria-label="Drawing tools">
+          <button class="active" data-drawing-tool="pencil" type="button" aria-pressed="true">✏️ Pencil</button>
+          <button data-drawing-tool="line" type="button" aria-pressed="false">╱ Line</button>
+          <button data-drawing-tool="rectangle" type="button" aria-pressed="false">▭ Rectangle</button>
+          <button data-drawing-tool="ellipse" type="button" aria-pressed="false">◯ Ellipse</button>
+          <button data-drawing-tool="fill" type="button" aria-pressed="false">▨ Fill</button>
+          <button data-drawing-tool="eraser" type="button" aria-pressed="false">⌫ Eraser</button>
+        </div>
+
+        <div class="canvas-actions">
+          <button id="undoButton" type="button" disabled>↩︎ Undo</button>
+          <button id="redoButton" type="button" disabled>↪︎ Redo</button>
+          <button id="clearButton" type="button" disabled>🗑 Clear</button>
+        </div>
+
+        <div class="draw-row">
+          <button class="big save-drawing-button" id="saveDrawingButton" type="button" disabled>💾 Save drawing</button>
+          <button class="big hidden" id="retakeButton" type="button">🤳 Retake selfie</button>
+          <button class="primary big draw-button" id="drawButton" type="button" disabled>
+            <span class="draw-button-word">🖨️ Draw it!</span>
+          </button>
+        </div>
+      </section>
+
+      <section class="view hidden" id="viewSelfie">
+        <div class="view-top">
+          <button class="ghost" id="backFromSelfie" type="button">← Back</button>
+        </div>
+        <div class="selfie-size-toggle" id="selfieSizeToggle" role="group" aria-label="Frame shape">
+          <button type="button" data-size="3:4">3:4</button>
+          <button type="button" data-size="square">Square</button>
+        </div>
+        <div class="camera-wrap" id="cameraWrap">
+          <video id="cameraVideo" autoplay playsinline muted></video>
+          <div class="countdown hidden" id="countdown"></div>
+          <div class="flash" id="flash"></div>
+          <div class="camera-error hidden" id="cameraError"></div>
+        </div>
+        <button class="primary big" id="snapButton" type="button">📸 Take a selfie</button>
+      </section>
+
+      <section class="view hidden" id="viewPremade">
+        <div class="view-top">
+          <button class="ghost" id="backFromPremade" type="button">← Back</button>
+        </div>
+        <section class="premade-section">
+          <h2>Built-in pictures</h2>
+          <p class="premade-hint">Pick a picture to prepare a plot:</p>
+          <div class="premade-grid" id="premadeGrid"></div>
+        </section>
+
+        <section class="saved-gallery-section">
+          <div class="gallery-heading">
+            <div>
+              <h2>Saved drawings</h2>
+              <p>Open any drawing to edit a copy or print it. The original stays unchanged.</p>
+            </div>
+            <label for="gallerySort">Sort
+              <select id="gallerySort">
+                <option value="recent">Most recent</option>
+                <option value="popular">Most popular</option>
+              </select>
+            </label>
+          </div>
+          <p class="gallery-status" id="galleryStatus">Loading saved drawings…</p>
+          <div class="saved-gallery" id="savedGallery"></div>
+        </section>
+      </section>
+    </main>
+
+    <aside class="gcode-panel" id="gcodePanel" aria-hidden="true">
+      <div class="gcode-header">
+        <div><p class="eyebrow">Generated job</p><strong id="gcodeMeta">No G-code yet</strong></div>
+        <button class="close-button" id="closeGcode" type="button" aria-label="Close G-code panel">×</button>
+      </div>
+      <pre id="gcodePreview">Start drawing to see the generated G-code.</pre>
+    </aside>
+
+    <aside class="gcode-panel" id="logsPanel" aria-hidden="true">
+      <div class="gcode-header">
+        <div><p class="eyebrow">Application logs</p><strong id="logsMeta">0 entries</strong></div>
+        <button class="close-button" id="closeLogs" type="button" aria-label="Close logs panel">×</button>
+      </div>
+      <div class="logs-lock" id="logsLock">
+        <label for="logsPassword">Admin password</label>
+        <div class="logs-lock-row">
+          <input id="logsPassword" type="password" placeholder="Admin password" autocomplete="off" />
+          <button id="logsUnlock" type="button">Unlock</button>
+        </div>
+      </div>
+      <pre id="logsOutput" class="hidden"></pre>
+    </aside>
+
+    <div class="modal-backdrop hidden" id="saveDrawingModal" role="dialog" aria-modal="true" aria-labelledby="saveDrawingTitle">
+      <form class="save-drawing-dialog" id="saveDrawingForm">
+        <div class="modal-heading">
+          <div>
+            <p class="eyebrow">Share your artwork</p>
+            <h2 id="saveDrawingTitle">Save drawing</h2>
+          </div>
+          <button class="modal-close" id="closeSaveDrawing" type="button" aria-label="Close">×</button>
+        </div>
+        <canvas id="saveDrawingPreview" width="420" height="420" aria-label="Preview of drawing to save"></canvas>
+        <p class="save-preview-caption"><strong id="savePreviewName">Your drawing</strong> by <span id="savePreviewArtist">Your name</span></p>
+        <p class="save-remix-note hidden" id="saveRemixNote"></p>
+        <label for="drawingName">Name of drawing</label>
+        <input id="drawingName" type="text" maxlength="60" placeholder="e.g. Moon Garden" required autocomplete="off" />
+        <label for="drawerName">Name of drawer</label>
+        <input id="drawerName" type="text" maxlength="60" placeholder="e.g. Sam" required autocomplete="name" />
+        <p class="public-save-note">🌍 This drawing will be saved publicly so other people can view and print it. A copy is also kept in this browser.</p>
+        <div class="modal-actions">
+          <button id="cancelSaveDrawing" type="button">Cancel</button>
+          <button class="primary save-submit" id="confirmSaveDrawing" type="submit"><span class="saving-spinner" aria-hidden="true"></span><span class="save-submit-label">Save publicly</span></button>
+        </div>
+      </form>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="color-svg.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
