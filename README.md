@@ -1,18 +1,21 @@
 # Small Plotter
 
-A drawing and public artwork gallery for a pen plotter running RepRapFirmware / Duet Web Control.
+A drawing app, color SVG converter, and public artwork gallery for an eight-marker pen plotter running RepRapFirmware / Duet Web Control.
 
-The canvas supports freehand pencil strokes, straight lines, rectangles, ellipses, and a drag eraser with one-step undo for each erase gesture.
+The canvas supports freehand pencil strokes, straight lines, rectangles, ellipses, hatched fills, and a drag eraser with undo and redo. Import color SVGs with automatic marker matching, or turn a webcam selfie into adjustable squiggle art. Optional selfie background removal runs locally with the bundled TensorFlow.js model.
 
 Built-in pictures are discovered from every unique `.gcode` basename in `assets/`. A matching `.png` or `.jpg` file is used as its card preview (`.jpeg` is also supported for existing assets); the app then generates the usual bed-sized, pen-controlled Duet job.
 
 ## Use
 
-1. Run `node server.mjs` (defaults to `http://127.0.0.1:8080`).
+1. With Node.js installed, run `node server.mjs` (defaults to `http://127.0.0.1:8080`; override the bind address and port with `HOST` and `PORT`).
 2. Open that address in a modern desktop browser.
-3. Enter the board endpoint, for example `http://192.168.1.42/rr_upload`.
-4. Set the physical drawing area to a safe rectangle within the machine's X/Y travel.
-5. Draw with the pencil, line, rectangle, or ellipse tool, then click **Draw it!**. The job is uploaded as `0:/gcodes/small-plotter.gcode` and starts immediately when **Start after upload** is enabled.
+3. Open **⚙️ Admin** and unlock it with the built-in UI password, `meowl`. Under **Duet connection**, enter the board address, for example `http://192.168.1.42` (a pasted `/rr_upload` suffix also works). The optional Duet password is separate from the admin UI password.
+4. Set **Tool colors** to match the markers loaded in `T0`–`T7`, and set **Drawing area** and speeds for the machine. The initial drawing area is 118 × 118 mm.
+5. Draw a picture, import a color SVG, take a selfie, or pick a premade picture.
+6. Click **Draw it!** to upload `0:/gcodes/small-plotter.gcode`. It starts after upload when **Admin → Job → Start after upload** is enabled.
+
+To download instead, open **⚙️ Admin → Job → Save .gcode** after preparing artwork. This saves the generated file, including marker tool changes, without contacting the board. **G-code** in the same section opens the job preview. Drawing, SVG conversion, previewing, and downloading work without a connected plotter.
 
 There is no build step or package install. Public saved drawings and their print counts are stored in `.data/drawings.json`; `.data/` is intentionally ignored by Git. Each saved drawing is also copied to that browser's `localStorage`, so the artist retains a local copy if the public server is temporarily unavailable.
 
@@ -31,11 +34,13 @@ M280 P0 S95
 G4 P25
 ```
 
-Every job begins with the requested pen-up sequence and ends with the requested park/home/disable sequence:
+Every job uses absolute positioning, lifts the pen and homes before drawing, then finishes with the park/home/disable sequence:
 
 ```gcode
+G90
 M280 P0 S95
 G4 P60
+G28
 ...
 M280 P0 S50
 G4 P40
@@ -43,9 +48,9 @@ G28
 M84
 ```
 
-`rr_upload` receives a raw POST body, not multipart form data. Uploads include a CRC32, wait for the firmware's upload-status response, and verify the saved byte count with `rr_fileinfo` before `M32` is sent. The previous `small-plotter.gcode` is removed before each upload, so the stable filename does not accumulate jobs or allow an equally-sized old file to satisfy verification. The app warms the Duet HTTP connection with `GET rr_upload` before each upload to avoid stale keep-alive resets seen in Firefox (`rr_connect` is used only when a password is entered). Upload POSTs use one controlled recovery attempt with the same filename and CRC; the start command is never retried because doing so could restart a running plot.
+The browser sends the job directly to the Duet over HTTP; the Node.js server serves the app and gallery API. `rr_upload` receives a raw POST body, not multipart form data. Uploads include a CRC32, wait for the firmware's upload-status response, and verify the saved byte count with `rr_fileinfo` before `M32` is sent when responses are readable. The app attempts to delete the previous `small-plotter.gcode` before each upload so an equally-sized old file does not satisfy verification; deletion failures are logged. The app warms the Duet HTTP connection with `GET rr_upload` before each upload to avoid stale keep-alive resets seen in Firefox (`rr_connect` is used only when a password is entered). Upload POSTs use one controlled recovery attempt with the same filename and CRC; the start command is never retried because doing so could restart a running plot.
 
-For full upload confirmation, serve this page over HTTP and allow its origin in RepRapFirmware with `M586`. When opened directly as a `file://` page without CORS permission, browser security makes Duet responses opaque. In that mode the app serializes the upload-status and file-info requests and waits for an SD-card completion barrier before starting, but it cannot display the returned JSON. Use Duet Web Control to monitor or stop the running job.
+For full upload confirmation, serve this page over HTTP and allow its origin in RepRapFirmware with `M586`. If cross-origin responses cannot be read, including typical `file://` use, the app falls back to opaque requests. In that mode it serializes the upload-status and file-info requests and waits before starting, but cannot confirm upload success or the saved byte count. Use Duet Web Control to monitor or stop the running job.
 
 The admin-locked log panel records request IDs, browser information, transport mode, timings, upload byte counts and CRC, verification results, retries, and the exact point at which `M32` is dispatched. Passwords and G-code query contents are redacted.
 
