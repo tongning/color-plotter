@@ -61,7 +61,10 @@
   // lifts instead of drawing a long perimeter lap. It scales with spacing:
   // neighbouring lines meet the same edge about spacing * sqrt(2) apart
   // along it, so 4 * spacing lets every normal neighbour connection
-  // through and only lifts for genuinely distant runs.
+  // through and only lifts for genuinely distant runs. The ring is a
+  // pixel staircase, so a connector may draw up to connectMax * sqrt(2)
+  // along it on a 45-degree edge; that is the same short wall run, not
+  // a longer threshold.
   function hatchStrokes(inside, size, spacing, edgeGap = 0, connectMax = 4 * spacing) {
     const total = size * size;
     const step = Math.max(1, Math.round(spacing * Math.SQRT2));
@@ -235,7 +238,11 @@
         }
         const arc = arcLen(ai, bi);
         const length = ad + arc + bd;
-        if (length <= connectMax && (!best || length < best.length)) best = { ring, prefix, total, ai, bi, length };
+        // The ring is a pixel staircase, so the arc along it overstates
+        // the distance along the wall by up to sqrt(2) on a 45-degree
+        // edge. Allow that inflation; the chord check above is what
+        // keeps genuinely distant runs (a lap around a U-shape) out.
+        if (length <= connectMax * Math.SQRT2 && (!best || length < best.length)) best = { ring, prefix, total, ai, bi, length };
       }
       if (!best) return null;
       // Jogs from the endpoints onto the ring: straight if the pixels
@@ -257,10 +264,11 @@
       for (let k = best.ai; k !== best.bi; k = (k + dir + best.ring.length) % best.ring.length) path.push(best.ring[k]);
       path.push(best.ring[best.bi], ...jogB);
       // The jogs may wander a little off the straight line; measure the
-      // path as drawn and lift if it ran long after all.
+      // path as drawn and lift if it ran long after all. Same staircase
+      // allowance as above.
       let actual = 0;
       for (let i = 1; i < path.length; i++) actual += distance(path[i - 1], path[i]);
-      if (actual > connectMax) return null;
+      if (actual > connectMax * Math.SQRT2) return null;
       return { path, length: actual };
     }
 
@@ -303,15 +311,27 @@
             if (i < 0) i = candidates.length;
             if (i < 8) { candidates.splice(i, 0, candidate); if (candidates.length > 8) candidates.pop(); }
           }
+          // One-pixel edge fragments strand if the pen leaves their
+          // neighbourhood, so always consider nearby dots even when
+          // nearer run endpoints crowd them out of the top 8.
+          for (const run of runs) {
+            if (!run.done && run.start === run.end
+              && distance(current, run.start) <= connectMax
+              && !candidates.some(c => c.run === run)) {
+              const candidate = { run, reverse: false, start: run.start, length: distance(current, run.start) };
+              let i = candidates.findIndex(other => other.length > candidate.length);
+              if (i < 0) i = candidates.length;
+              candidates.splice(i, 0, candidate);
+            }
+          }
           let best = null, bestDot = null;
           for (const candidate of candidates) {
             if (best && candidate.length >= best.link.length) break;
-            // Prefer the wall-hugging boundary link; a short hop through
-            // the fill itself is the fallback (harmless ink inside a
-            // solid fill, and it saves a lift for a fragment the pen is
-            // already next to). Longer than connectMax either way, lift.
-            const link = boundaryLink(current, candidate.start, label)
-              || connector(current, candidate.start, connectMax);
+            // Top-infill rule (Cura Lines / Zig Zag): a connector runs
+            // along the wall or not at all. No hop through the fill
+            // itself, however short: that is the line that cuts across
+            // the hatching. Longer than connectMax, the pen lifts.
+            const link = boundaryLink(current, candidate.start, label);
             if (!link) continue;
             const entry = { ...candidate, link };
             if (!best || link.length < best.link.length) best = entry;

@@ -43,8 +43,11 @@ test('rectangle fills continuously, covers every hatch, and uses compact paths',
 test('holes stay empty while connected fill avoids repeated perimeter laps',()=>{
   const mask=maskFor((x,y)=>x>=8&&x<88&&y>=8&&y<88&&!(x>=30&&x<66&&y>=30&&y<66));
   const strokes=hatchStrokes(mask,size,2);
-  assert.equal(strokes.length,1);
-  // Old boundary-biased routing traveled 3,361 pixels for this fixture.
+  // Top-infill rule: no hop through the fill to join the two sides of
+  // the hole, however short; the pen lifts instead of drawing a line
+  // across the hatching. Old boundary-biased routing traveled 3,361
+  // pixels for this fixture.
+  assert.equal(strokes.length,2);
   assert.ok(length(strokes)<2800,`fill traveled ${length(strokes)} pixels`);
   checkInside(strokes,mask);checkCoverage(strokes,mask);
 });
@@ -56,7 +59,7 @@ test('deep concave branches fill without repeatedly retracing their perimeter',(
   // notch walls to join them (the boundary path around a slot is far
   // longer than the connector cap), so this is several strokes, not one.
   // Old scanline ordering traveled 5,867 pixels for this fixture.
-  assert.equal(strokes.length,5);
+  assert.equal(strokes.length,6);
   assert.ok(length(strokes)<3400,`fill traveled ${length(strokes)} pixels`);
   checkInside(strokes,mask);checkCoverage(strokes,mask);
 });
@@ -64,7 +67,10 @@ test('deep concave branches fill without repeatedly retracing their perimeter',(
 test('U-shape lifts between arms instead of lapping the notch',()=>{
   const mask=maskFor((x,y)=>x>=8&&x<88&&y>=8&&y<88&&!(x>=36&&x<60&&y<60));
   const strokes=hatchStrokes(mask,size,2);
-  assert.equal(strokes.length,2);
+  // The wall path around the notch is far longer than the connector cap,
+  // and no hop through the fill is allowed, so the arms and the base
+  // are separate strokes.
+  assert.equal(strokes.length,3);
   checkInside(strokes,mask);checkCoverage(strokes,mask);
 });
 
@@ -72,8 +78,10 @@ test('circle keeps its edge fragments in the fill instead of stranding them',()=
   const mask=maskFor((x,y)=>Math.hypot(x-48,y-48)<=40);
   const strokes=hatchStrokes(mask,size,2);
   // The curved edge grazes many scanlines into one-pixel runs. They are
-  // drawn while the pen is next to them (and short interior hops join
-  // them) instead of each getting its own lift.
+  // drawn while the pen is next to them (dot priority plus wall-only
+  // links) instead of each getting its own lift. One far-left dot is
+  // still stranded at this spacing; at the app default (2.5) it joins
+  // and the circle is a single stroke.
   assert.equal(strokes.length,2);
   checkInside(strokes,mask);checkCoverage(strokes,mask);
 });
