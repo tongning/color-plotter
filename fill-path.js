@@ -1,8 +1,20 @@
 /* Connected raster hatching shared by SVG import and the canvas fill tool. */
 (() => {
-  function hatchStrokes(inside, size, spacing) {
+  // edgeGap is the distance, in raster pixels along the hatch direction,
+  // between a hatch endpoint and the shape edge. It is independent of
+  // spacing, which sets the distance between hatch lines. 0 puts the
+  // endpoint at the edge; a negative value extends past it, so the fill
+  // overlaps the separately drawn outline.
+  function hatchStrokes(inside, size, spacing, edgeGap = 0) {
     const total = size * size;
     const step = Math.max(1, Math.round(spacing * Math.SQRT2));
+    // A run endpoint sits at its pixel centre; the edge along the diagonal
+    // is half a diagonal away (0.5 * sqrt(2) px). Extend the endpoint to
+    // the edge, less the requested gap. Cap the extension at 0.6px when the
+    // gap is not negative, so the endpoint stays inside its own pixel and
+    // no segment can sample an outside pixel at a concave corner.
+    const edgeExtension = Math.max(0, 0.5 * Math.SQRT2 - edgeGap);
+    const cappedExtension = edgeGap < 0 ? edgeExtension : Math.min(0.6, edgeExtension);
     const labels = new Int32Array(total);
     const queue = new Int32Array(total);
     let component = 0;
@@ -139,6 +151,7 @@
     const strokes = [];
     for (const runs of groups.values()) {
       const indices = [];
+      const edgePoints = new Map();
       function append(index) {
         if (indices.at(-1) === index) return;
         if (indices.length > 1) {
@@ -174,9 +187,23 @@
         for (const index of best.link.path) append(index);
         current = best.reverse ? best.run.start : best.run.end;
         append(current); best.run.done = true;
+        // Remember run endpoints so they can be extended to the edge.
+        // A one-pixel run is a dot; leave it centred.
+        if (best.run.start !== best.run.end) {
+          edgePoints.set(best.run.start, -1);
+          edgePoints.set(best.run.end, 1);
+        }
       }
       if (indices.length === 1) indices.push(indices[0]);
-      const stroke = indices.map(index => ({ x: (index % size + .5) / size, y: (Math.floor(index / size) + .5) / size }));
+      const stroke = indices.map(index => {
+        const point = { x: (index % size + .5) / size, y: (Math.floor(index / size) + .5) / size };
+        const direction = edgePoints.get(index);
+        if (direction) {
+          const offset = direction * cappedExtension / Math.SQRT2 / size;
+          point.x += offset; point.y += offset;
+        }
+        return point;
+      });
       // Connected fill paths must not be rounded across holes by freehand smoothing.
       stroke.shape = true;
       strokes.push(stroke);
@@ -185,7 +212,7 @@
   }
   // Traced line art often encodes an ink line as a narrow filled ribbon.
   // Separate those components from solid areas before deciding how to plot them.
-  function svgFillStrokes(mask, size, spacing) {
+  function svgFillStrokes(mask, size, spacing, edgeGap = 0) {
     const total = size * size;
     const depth = new Float32Array(total);
     const root2 = Math.SQRT2;
@@ -219,7 +246,7 @@
       const target=core/tail<=.05?narrow:solid;
       for(let j=0;j<tail;j++) target[queue[j]]=1;
     }
-    return [...centerlineStrokes(narrow,size),...hatchStrokes(solid,size,spacing)];
+    return [...centerlineStrokes(narrow,size),...hatchStrokes(solid,size,spacing,edgeGap)];
   }
 
   function centerlineStrokes(mask, size) {

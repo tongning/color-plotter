@@ -65,6 +65,22 @@ test('separate islands use one stroke each and never connect across blank space'
   checkInside(strokes,mask);checkCoverage(strokes,mask);
 });
 
+test('hatch endpoints reach the edge, with the edge distance separate from the spacing',()=>{
+  const mask=maskFor((x,y)=>x>=8&&x<88&&y>=8&&y<88);
+  // Default edge gap 0: endpoints extend from their pixel centres toward
+  // the edge, so some points sit closer to the edge than any pixel centre.
+  const atEdge=hatchStrokes(mask,size,2,0);
+  assert.ok(atEdge.flat().some(p=>p.y*size<8.5), 'endpoints should reach past the outermost pixel centres');
+  assert.ok(atEdge.flat().every(p=>p.y*size>=8), 'default gap keeps endpoints inside the shape');
+  // A 1px edge gap leaves endpoints at their pixel centres, as before.
+  const inset=hatchStrokes(mask,size,2,1);
+  assert.ok(inset.flat().every(p=>p.y*size>=8.5), 'a 1px edge gap should not extend endpoints');
+  // A negative edge gap extends past the edge, into the separately drawn outline.
+  const overlap=hatchStrokes(mask,size,2,-1);
+  assert.ok(overlap.flat().some(p=>p.y*size<8), 'a negative edge gap should extend past the edge');
+  checkInside(atEdge,mask);checkInside(inset,mask);
+});
+
 test('one-pixel-wide connected regions are retained',()=>{
   const mask=maskFor((x,y)=>x===40&&y>=8&&y<88);
   const strokes=hatchStrokes(mask,size,2);
