@@ -1,9 +1,8 @@
+
 /* Color matching and SVG geometry conversion. No network or third-party runtime. */
 (() => {
   const DEFAULT_PALETTE = ["#202124", "#e53935", "#f58220", "#f4ce28", "#2e9d52", "#00a7b5", "#3367d6", "#8e44ad"];
   const SIZE = 480;
-  const MAX_POINTS = 50000;
-  const MAX_STROKES = 500;
   const isColor = (value) => typeof value === "string" && /^#[\da-f]{6}$/i.test(value);
 
   // OKLab distance compares colors perceptually, including saturated blues.
@@ -102,12 +101,10 @@
     return pieces;
   }
 
-  async function importSvg(text, hatchStrokes) {
-    if (text.length > 2 * 1024 * 1024) throw new Error("Choose an SVG smaller than 2 MB.");
+  async function importSvg(text, hatchStrokes, fillSpacing) {
     const parsed = new DOMParser().parseFromString(text, "image/svg+xml");
     const source = parsed.documentElement;
     if (source.localName !== "svg" || parsed.querySelector("parsererror")) throw new Error("This file is not a valid SVG.");
-    if (source.querySelectorAll("*").length > 3000) throw new Error("This SVG has too many elements. Simplify it first.");
 
     // Isolate SVG CSS from the app. Imported scripts/events/links are never copied;
     // CSP also blocks external styles, images, fonts and other resource requests.
@@ -152,17 +149,12 @@
       svg.style.setProperty("height", `${SIZE}px`, "important");
       doc.body.append(svg);
       const strokes = [];
-      let sampleCount = 0;
-      let outputPointCount = 0;
       const raster = document.createElement("canvas"); raster.width = raster.height = SIZE;
       const context = raster.getContext("2d", { willReadFrequently: true });
       function add(points, color) {
         if (points.length < 2) return;
-        outputPointCount += points.length;
-        if (outputPointCount > MAX_POINTS) throw new Error("SVG produces too many drawing points (maximum 50,000). Simplify it first.");
         points.color = color; points.shape = true;
         strokes.push(points);
-        if (strokes.length > MAX_STROKES) throw new Error("SVG produces too many strokes (maximum 500). Simplify it first.");
       }
       function colorOf(value, opacity) {
         if (value === "none" || opacity <= 0) return null;
@@ -201,8 +193,6 @@
             const length = element.getTotalLength();
             if (!Number.isFinite(length) || length <= 0) continue;
             const steps = Math.max(1, Math.ceil(length * scale));
-            sampleCount += steps + 1;
-            if (sampleCount > MAX_POINTS) throw new Error("SVG has too much detail (maximum 50,000 sampled points). Simplify it first.");
             const points = [];
             for (let i = 0; i <= steps; i++) {
               const p = element.getPointAtLength(length * i / steps).matrixTransform(matrix);
@@ -214,16 +204,35 @@
         } finally { if (original !== null) element.setAttribute("d", original); }
         if (fill) {
           context.clearRect(0, 0, SIZE, SIZE); context.beginPath();
+          let perimeter = 0;
           for (const points of outlines) {
             context.moveTo(points[0].x * SIZE, points[0].y * SIZE);
-            for (const point of points.slice(1)) context.lineTo(point.x * SIZE, point.y * SIZE);
+            for (let i = 1; i < points.length; i++) {
+              const a = points[i - 1], b = points[i];
+              context.lineTo(b.x * SIZE, b.y * SIZE);
+              perimeter += Math.hypot(b.x - a.x, b.y - a.y) * SIZE;
+            }
+            // SVG fill implicitly closes open subpaths; include that edge in the perimeter.
+            const first = points[0], last = points[points.length - 1];
+            perimeter += Math.hypot(first.x - last.x, first.y - last.y) * SIZE;
             context.closePath();
           }
           context.fillStyle = "#000"; context.fill(style.fillRule === "evenodd" ? "evenodd" : "nonzero");
           const data = context.getImageData(0, 0, SIZE, SIZE).data;
           const mask = new Uint8Array(SIZE * SIZE);
-          for (let i = 0; i < mask.length; i++) mask[i] = data[i * 4 + 3] > 127 ? 1 : 0;
-          for (const hatch of hatchStrokes(mask)) add(hatch, fill);
+          let area = 0;
+          for (let i = 0; i < mask.length; i++) {
+            const inside = data[i * 4 + 3] > 127;
+            mask[i] = inside ? 1 : 0;
+            if (inside) area++;
+          }
+          // area / perimeter estimates average filled width in raster pixels.
+          // Two hatch spacings is the minimum useful width for a filled region.
+          const minimumWidth = Number.isFinite(fillSpacing) && fillSpacing > 0 ? fillSpacing * 2 : 0;
+          const averageWidth = perimeter > 0 ? area / perimeter : 0;
+          if (averageWidth >= minimumWidth && area > 0) {
+            for (const hatch of hatchStrokes(mask)) add(hatch, fill);
+          }
         }
         if (stroke) for (const points of outlines) for (const piece of clipPolyline(points)) add(piece, stroke);
       }
