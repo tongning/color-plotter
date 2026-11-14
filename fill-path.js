@@ -1,11 +1,68 @@
 /* Connected raster hatching shared by SVG import and the canvas fill tool. */
 (() => {
+  // Trace the boundary ring of each filled component with Moore-neighbour
+  // tracing: one ordered ring of boundary pixel indices per outer edge and
+  // per hole. Diagonal steps across concave corners go through the inside
+  // pixel instead, so no segment leaves the mask. Rings are used to route
+  // hatch connectors along the wall, Cura-style, instead of cutting across
+  // the interior. Returns a Map from component label to its rings.
+  function boundaryRings(inside, size, labels) {
+    const total = size * size;
+    const atLabel = (x, y, label) => x >= 0 && x < size && y >= 0 && y < size && labels[y * size + x] === label;
+    const isBoundary = (x, y, label) => atLabel(x, y, label) && (!atLabel(x - 1, y, label) || !atLabel(x + 1, y, label) || !atLabel(x, y - 1, label) || !atLabel(x, y + 1, label));
+    const dirs = [[0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1]];
+    const visited = new Uint8Array(total);
+    const rings = new Map();
+    for (let sy = 0; sy < size; sy++) for (let sx = 0; sx < size; sx++) {
+      const label = labels[sy * size + sx];
+      if (!label || !isBoundary(sx, sy, label) || visited[sy * size + sx]) continue;
+      let cur = [sx, sy], backDir = 6;
+      const loop = [cur[0] + cur[1] * size];
+      visited[cur[1] * size + cur[0]] = 1;
+      let guard = 0;
+      while (guard++ < total * 2) {
+        let found = -1;
+        for (let k = 0; k < 8; k++) {
+          const d = (backDir + 2 + k) % 8;
+          const dx = dirs[d][0], dy = dirs[d][1];
+          const nx = cur[0] + dx, ny = cur[1] + dy;
+          if (isBoundary(nx, ny, label)) {
+            // A diagonal step across a concave corner would cut outside
+            // the region at the corner point. Step through the inside
+            // orthogonal pixel instead, so the loop stays inside.
+            if (dx && dy && (!atLabel(nx, cur[1], label) || !atLabel(cur[0], ny, label))) {
+              if (atLabel(nx, cur[1], label)) { found = dx > 0 ? 2 : 6; break; }
+              if (atLabel(cur[0], ny, label)) { found = dy > 0 ? 4 : 0; break; }
+            }
+            found = d; break;
+          }
+        }
+        if (found < 0) break;
+        backDir = (found + 4) % 8;
+        cur = [cur[0] + dirs[found][0], cur[1] + dirs[found][1]];
+        if (cur[0] === sx && cur[1] === sy) break;
+        loop.push(cur[0] + cur[1] * size);
+        if (isBoundary(cur[0], cur[1], label)) visited[cur[1] * size + cur[0]] = 1;
+      }
+      if (loop.length < 3) continue;
+      if (!rings.has(label)) rings.set(label, []);
+      rings.get(label).push(loop);
+    }
+    return rings;
+  }
+
   // edgeGap is the distance, in raster pixels along the hatch direction,
   // between a hatch endpoint and the shape edge. It is independent of
   // spacing, which sets the distance between hatch lines. 0 puts the
   // endpoint at the edge; a negative value extends past it, so the fill
   // overlaps the separately drawn outline.
-  function hatchStrokes(inside, size, spacing, edgeGap = 0) {
+  // connectMax is the longest a connector may run along the boundary
+  // between two hatch runs, in raster pixels. Longer than that, the pen
+  // lifts instead of drawing a long perimeter lap. It scales with spacing:
+  // neighbouring lines meet the same edge about spacing * sqrt(2) apart
+  // along it, so 4 * spacing lets every normal neighbour connection
+  // through and only lifts for genuinely distant runs.
+  function hatchStrokes(inside, size, spacing, edgeGap = 0, connectMax = 4 * spacing) {
     const total = size * size;
     const step = Math.max(1, Math.round(spacing * Math.SQRT2));
     // A run endpoint sits at its pixel centre; the edge along the diagonal
@@ -148,71 +205,155 @@
       return null;
     }
 
-    const strokes = [];
-    for (const runs of groups.values()) {
-      const indices = [];
-      const edgePoints = new Map();
-      function append(index) {
-        if (indices.at(-1) === index) return;
-        if (indices.length > 1) {
-          const a = indices.at(-2), b = indices.at(-1);
-          const ax = b % size - a % size, ay = Math.floor(b / size) - Math.floor(a / size);
-          const bx = index % size - b % size, by = Math.floor(index / size) - Math.floor(b / size);
-          // Exact collinear compression keeps grid corners and holes intact.
-          if (ax * by === ay * bx && ax * bx + ay * by > 0) indices.pop();
+    // Cura-style connector: join two hatch runs by running along the shape
+    // boundary between them, so the fill hugs the wall instead of cutting
+    // across the interior. Returns null when the boundary path (including
+    // the short jogs from the run endpoints onto the ring) is longer than
+    // connectMax: the caller lifts the pen instead of drawing a long
+    // perimeter lap. The A* connector survives only for those tiny jogs.
+    const rings = boundaryRings(inside, size, labels);
+    function boundaryLink(from, to, label) {
+      if (from === to) return { path: [from], length: 0 };
+      const labelRings = rings.get(label);
+      if (!labelRings) return null;
+      let best = null;
+      for (const ring of labelRings) {
+        const n = ring.length;
+        // Prefix sums of step lengths, so an arc length is O(1).
+        const prefix = new Float64Array(n + 1);
+        for (let i = 0; i < n; i++) prefix[i + 1] = prefix[i] + distance(ring[i], ring[(i + 1) % n]);
+        const total = prefix[n];
+        const arcLen = (i, j) => {
+          const forward = (prefix[j] - prefix[i] + total) % total;
+          return Math.min(forward, total - forward);
+        };
+        let ai = -1, ad = Infinity, bi = -1, bd = Infinity;
+        for (let i = 0; i < n; i++) {
+          const d0 = distance(from, ring[i]), d1 = distance(to, ring[i]);
+          if (d0 < ad) { ad = d0; ai = i; }
+          if (d1 < bd) { bd = d1; bi = i; }
         }
-        indices.push(index);
+        const arc = arcLen(ai, bi);
+        const length = ad + arc + bd;
+        if (length <= connectMax && (!best || length < best.length)) best = { ring, prefix, total, ai, bi, length };
       }
+      if (!best) return null;
+      // Jogs from the endpoints onto the ring: straight if the pixels
+      // allow, else a short A* (endpoints sit at the edge, so the jog
+      // is a pixel or two).
+      const jog = (a, b) => {
+        const direct = straightPath(a, b);
+        if (direct) return direct;
+        const link = connector(a, b, 4);
+        return link ? link.path : null;
+      };
+      const jogA = jog(from, best.ring[best.ai]);
+      const jogB = jog(best.ring[best.bi], to);
+      if (!jogA || !jogB) return null;
+      // Walk the ring the short way around between the two nearest points.
+      const forward = (best.prefix[best.bi] - best.prefix[best.ai] + best.total) % best.total;
+      const dir = forward <= best.total - forward ? 1 : -1;
+      const path = [...jogA];
+      for (let k = best.ai; k !== best.bi; k = (k + dir + best.ring.length) % best.ring.length) path.push(best.ring[k]);
+      path.push(best.ring[best.bi], ...jogB);
+      // The jogs may wander a little off the straight line; measure the
+      // path as drawn and lift if it ran long after all.
+      let actual = 0;
+      for (let i = 1; i < path.length; i++) actual += distance(path[i - 1], path[i]);
+      if (actual > connectMax) return null;
+      return { path, length: actual };
+    }
+
+    const strokes = [];
+    for (const [label, runs] of groups) {
+      let remaining = runs.length;
       let current = runs[0].start;
-      for (let remaining = runs.length; remaining > 0; remaining--) {
-        // Consider the closest unfinished endpoints, rather than forcing all
-        // segments on a split scanline (and a lap around its hole) in sequence.
-        const candidates = [];
+      while (remaining > 0) {
+        // A new stroke starts at the unfinished endpoint nearest the pen;
+        // the pen is up, so no link is drawn to get there.
+        let startRun = null, startReverse = false, startDist = Infinity;
         for (const run of runs) if (!run.done) for (const reverse of [false, true]) {
           const start = reverse ? run.end : run.start;
-          const length = distance(current, start);
-          const candidate = { run, reverse, start, length };
-          let i = candidates.findIndex(other => other.length > length);
-          if (i < 0) i = candidates.length;
-          if (i < 8) { candidates.splice(i, 0, candidate); if (candidates.length > 8) candidates.pop(); }
+          const d = distance(current, start);
+          if (d < startDist) { startDist = d; startRun = run; startReverse = reverse; }
         }
-        let best = null;
-        for (const candidate of candidates) {
-          if (best && candidate.length >= best.link.length) break;
-          const link = connector(current, candidate.start, best?.link.length);
-          if (link && (!best || link.length < best.link.length)) best = { ...candidate, link };
+        current = startReverse ? startRun.end : startRun.start;
+        const indices = [];
+        const edgePoints = new Map();
+        function append(index) {
+          if (indices.at(-1) === index) return;
+          if (indices.length > 1) {
+            const a = indices.at(-2), b = indices.at(-1);
+            const ax = b % size - a % size, ay = Math.floor(b / size) - Math.floor(a / size);
+            const bx = index % size - b % size, by = Math.floor(index / size) - Math.floor(b / size);
+            // Exact collinear compression keeps grid corners and holes intact.
+            if (ax * by === ay * bx && ax * bx + ay * by > 0) indices.pop();
+          }
+          indices.push(index);
         }
-        // Every run in this group is 4-connected, so a connector must exist.
-        if (!best) throw new Error("Could not route a connected fill region.");
-        for (const index of best.link.path) append(index);
-        current = best.reverse ? best.run.start : best.run.end;
-        append(current); best.run.done = true;
-        // Remember run endpoints so they can be extended to the edge.
-        // A one-pixel run is a dot; leave it centred.
-        if (best.run.start !== best.run.end) {
-          edgePoints.set(best.run.start, -1);
-          edgePoints.set(best.run.end, 1);
+        for (;;) {
+          // Consider the closest unfinished endpoints, rather than forcing all
+          // segments on a split scanline (and a lap around its hole) in sequence.
+          const candidates = [];
+          for (const run of runs) if (!run.done) for (const reverse of [false, true]) {
+            const start = reverse ? run.end : run.start;
+            const length = distance(current, start);
+            const candidate = { run, reverse, start, length };
+            let i = candidates.findIndex(other => other.length > length);
+            if (i < 0) i = candidates.length;
+            if (i < 8) { candidates.splice(i, 0, candidate); if (candidates.length > 8) candidates.pop(); }
+          }
+          let best = null, bestDot = null;
+          for (const candidate of candidates) {
+            if (best && candidate.length >= best.link.length) break;
+            // Prefer the wall-hugging boundary link; a short hop through
+            // the fill itself is the fallback (harmless ink inside a
+            // solid fill, and it saves a lift for a fragment the pen is
+            // already next to). Longer than connectMax either way, lift.
+            const link = boundaryLink(current, candidate.start, label)
+              || connector(current, candidate.start, connectMax);
+            if (!link) continue;
+            const entry = { ...candidate, link };
+            if (!best || link.length < best.link.length) best = entry;
+            // A one-pixel fragment on the edge is stranded if the pen
+            // leaves its neighbourhood, so draw it while it is here.
+            if (candidate.run.start === candidate.run.end
+              && (!bestDot || link.length < bestDot.link.length)) bestDot = entry;
+          }
+          best = bestDot || best;
+          // No short link to any unfinished run: lift the pen and start
+          // a new stroke instead of a long perimeter lap.
+          if (!best) break;
+          for (const index of best.link.path) append(index);
+          current = best.reverse ? best.run.start : best.run.end;
+          append(current); best.run.done = true; remaining--;
+          // Remember run endpoints so they can be extended to the edge.
+          // A one-pixel run is a dot; leave it centred.
+          if (best.run.start !== best.run.end) {
+            edgePoints.set(best.run.start, -1);
+            edgePoints.set(best.run.end, 1);
+          }
         }
+        if (indices.length === 1) indices.push(indices[0]);
+        const stroke = indices.map(index => {
+          const point = { x: (index % size + .5) / size, y: (Math.floor(index / size) + .5) / size };
+          const direction = edgePoints.get(index);
+          if (direction) {
+            const offset = direction * cappedExtension / Math.SQRT2 / size;
+            point.x += offset; point.y += offset;
+          }
+          return point;
+        });
+        // Connected fill paths must not be rounded across holes by freehand smoothing.
+        stroke.shape = true;
+        strokes.push(stroke);
       }
-      if (indices.length === 1) indices.push(indices[0]);
-      const stroke = indices.map(index => {
-        const point = { x: (index % size + .5) / size, y: (Math.floor(index / size) + .5) / size };
-        const direction = edgePoints.get(index);
-        if (direction) {
-          const offset = direction * cappedExtension / Math.SQRT2 / size;
-          point.x += offset; point.y += offset;
-        }
-        return point;
-      });
-      // Connected fill paths must not be rounded across holes by freehand smoothing.
-      stroke.shape = true;
-      strokes.push(stroke);
     }
     return strokes;
   }
   // Traced line art often encodes an ink line as a narrow filled ribbon.
   // Separate those components from solid areas before deciding how to plot them.
-  function svgFillStrokes(mask, size, spacing, edgeGap = 0) {
+  function svgFillStrokes(mask, size, spacing, edgeGap = 0, connectMax = 4 * spacing) {
     const total = size * size;
     const depth = new Float32Array(total);
     const root2 = Math.SQRT2;
@@ -246,7 +387,7 @@
       const target=core/tail<=.05?narrow:solid;
       for(let j=0;j<tail;j++) target[queue[j]]=1;
     }
-    return [...centerlineStrokes(narrow,size),...hatchStrokes(solid,size,spacing,edgeGap)];
+    return [...centerlineStrokes(narrow,size),...hatchStrokes(solid,size,spacing,edgeGap,connectMax)];
   }
 
   function centerlineStrokes(mask, size) {

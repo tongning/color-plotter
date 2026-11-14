@@ -21,6 +21,7 @@ const SELFIE_SQUIGGLE_LIMITS = { lines: 45, amp: 1.5 };
 const FILL_RASTER = 480; // px; offscreen raster the fill tool flood-fills
 const FILL_SPACING = 2; // px between hatch lines on that raster (~0.5mm on the default bed)
 const FILL_EDGE_GAP = 0; // px along a hatch line between its endpoint and the shape edge (negative extends past the edge, into the outline)
+const FILL_CONNECT_MAX = 4 * FILL_SPACING; // px along the boundary a hatch connector may run before the pen lifts instead (Cura-style: short wall-hugging links only)
 const PLOT_FILENAME = "small-plotter.gcode";
 const SAVED_DRAWINGS_KEY = "smallPlotter.savedDrawings.v1";
 const APP_SETTINGS_KEY = "smallPlotter.settings.v1";
@@ -984,12 +985,12 @@ function floodRegion(covered, startX, startY) {
 
 
 function hatchStrokes(inside) {
-  return PlotterFill.hatchStrokes(inside, FILL_RASTER, FILL_SPACING, FILL_EDGE_GAP);
+  return PlotterFill.hatchStrokes(inside, FILL_RASTER, FILL_SPACING, FILL_EDGE_GAP, FILL_CONNECT_MAX);
 }
 
 
 function svgFillStrokes(inside) {
-  return PlotterFill.svgFillStrokes(inside, FILL_RASTER, FILL_SPACING, FILL_EDGE_GAP);
+  return PlotterFill.svgFillStrokes(inside, FILL_RASTER, FILL_SPACING, FILL_EDGE_GAP, FILL_CONNECT_MAX);
 }
 
 function fillAt(point) {

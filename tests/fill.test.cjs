@@ -52,9 +52,54 @@ test('holes stay empty while connected fill avoids repeated perimeter laps',()=>
 test('deep concave branches fill without repeatedly retracing their perimeter',()=>{
   const mask=maskFor((x,y)=>x>=8&&x<88&&y>=8&&y<88&&!(y<68&&((x>=24&&x<32)||(x>=48&&x<56)||(x>=72&&x<80))));
   const strokes=hatchStrokes(mask,size,2);
-  assert.equal(strokes.length,1);
+  // Cura-style: the pen lifts between branches instead of lapping the
+  // notch walls to join them (the boundary path around a slot is far
+  // longer than the connector cap), so this is several strokes, not one.
   // Old scanline ordering traveled 5,867 pixels for this fixture.
+  assert.equal(strokes.length,5);
   assert.ok(length(strokes)<3400,`fill traveled ${length(strokes)} pixels`);
+  checkInside(strokes,mask);checkCoverage(strokes,mask);
+});
+
+test('U-shape lifts between arms instead of lapping the notch',()=>{
+  const mask=maskFor((x,y)=>x>=8&&x<88&&y>=8&&y<88&&!(x>=36&&x<60&&y<60));
+  const strokes=hatchStrokes(mask,size,2);
+  assert.equal(strokes.length,2);
+  checkInside(strokes,mask);checkCoverage(strokes,mask);
+});
+
+test('circle keeps its edge fragments in the fill instead of stranding them',()=>{
+  const mask=maskFor((x,y)=>Math.hypot(x-48,y-48)<=40);
+  const strokes=hatchStrokes(mask,size,2);
+  // The curved edge grazes many scanlines into one-pixel runs. They are
+  // drawn while the pen is next to them (and short interior hops join
+  // them) instead of each getting its own lift.
+  assert.equal(strokes.length,2);
+  checkInside(strokes,mask);checkCoverage(strokes,mask);
+});
+
+test('fill reaches the edge along a rectangle top',()=>{
+  const mask=maskFor((x,y)=>x>=8&&x<88&&y>=8&&y<88);
+  const strokes=hatchStrokes(mask,size,2);
+  // Distance from points on the true top edge to the nearest ink, in px.
+  // A snake can only cover half the edge stretches between hatch lines
+  // (one connection per run, two stretches per run), so the worst point
+  // is midway between two hatch lines; at 1.06px (0.26mm) it is well
+  // inside a marker line width, and the wall-hugging connectors cover
+  // the other half of the stretches.
+  const points=[];
+  for(const stroke of strokes) for(let i=1;i<stroke.length;i++) {
+    const a=stroke[i-1],b=stroke[i],n=Math.max(1,Math.ceil(Math.hypot(b.x-a.x,b.y-a.y)*size*8));
+    for(let j=0;j<=n;j++) points.push([(a.x+(b.x-a.x)*j/n)*size,(a.y+(b.y-a.y)*j/n)*size]);
+  }
+  let max=0,sum=0,n=0;
+  for(let x=8;x<88;x++) {
+    let d=Infinity;
+    for(const [px,py] of points) d=Math.min(d,Math.hypot(px-(x+.5),py-8));
+    max=Math.max(max,d);sum+=d;n++;
+  }
+  assert.ok(sum/n<0.5,`mean edge strip ${sum/n} px`);
+  assert.ok(max<1.1,`worst edge strip ${max} px`);
   checkInside(strokes,mask);checkCoverage(strokes,mask);
 });
 
