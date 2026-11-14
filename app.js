@@ -997,8 +997,15 @@ function fillAt(point) {
   const size = FILL_RASTER;
   const x = Math.min(size - 1, Math.floor(point.x * size));
   const y = Math.min(size - 1, Math.floor(point.y * size));
-  const inside = floodRegion(fillCoverageMask(), x, y);
-  const hatch = inside ? hatchStrokes(inside) : [];
+  const covered = fillCoverageMask();
+  const inside = floodRegion(covered, x, y);
+  // Vector fill from the stroke geometry (smooth edges); falls back to
+  // the raster hatch when no vector loop can be built.
+  let hatch = [];
+  if (inside) {
+    hatch = PlotterVectorFill.vectorHatch(state.strokes, covered, inside, size, FILL_SPACING, FILL_EDGE_GAP, FILL_CONNECT_MAX)
+      || hatchStrokes(inside);
+  }
   if (!hatch.length) {
     showToast("Tap an open area to fill it.", "error");
     return;

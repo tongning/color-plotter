@@ -554,7 +554,7 @@
     });
   }
 
-  const api = { hatchStrokes, svgFillStrokes };
+  const api = { hatchStrokes, svgFillStrokes, boundaryRings };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else window.PlotterFill = api;
 })();
