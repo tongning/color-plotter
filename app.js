@@ -2,7 +2,7 @@
 
 const PEN_DOWN = ["M280 P0 S168", "G4 P25"];
 const PEN_UP = ["M280 P0 S150", "G4 P25"];
-const JOB_START = ["M280 P0 S95", "G4 P60", "G28 ; home axes with the pen lifted"];
+const JOB_START = ["M280 P0 S150", "G4 P60", "G28 ; home axes with the pen lifted"];
 const JOB_END = ["T-1", "G28", "M84"];
 
 const MARKER_PALETTE_KEY = "smallPlotter.markerPalette.v1";
