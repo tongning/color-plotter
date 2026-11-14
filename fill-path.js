@@ -51,6 +51,64 @@
     return rings;
   }
 
+  // Douglas-Peucker simplification of a polyline given as pixel indices.
+  // Only removes points, so the result is still a list of indices and the
+  // rest of the pipeline is untouched. A tolerance of 0.75px collapses
+  // the pixel staircase of a 45-degree edge (whose points sit up to
+  // 0.71px off the diagonal) into straight chords while keeping real
+  // corners, so a connector follows the wall smoothly instead of
+  // stair-stepping along it. The full ring stays unsimplified for
+  // lookups; only the drawn connector path is smoothed. A chord can
+  // still clip the corner of a pixel whose centre is outside the mask,
+  // so every simplified segment is checked against the mask and any
+  // segment that leaves it falls back to the original stair-step points
+  // for that stretch. The points next to each end are always kept: an
+  // arc endpoint can coincide with a run endpoint, which the stroke
+  // builder extends past the edge, and a long chord straight to that
+  // extended point can clip the corner of an outside pixel.
+  function simplifyPath(indices, size, inside, tolerance = 0.75) {
+    if (indices.length < 3) return indices;
+    const keep = new Uint8Array(indices.length);
+    keep[0] = 1; keep[indices.length - 1] = 1;
+    if (indices.length >= 4) { keep[1] = 1; keep[indices.length - 2] = 1; }
+    const px = i => indices[i] % size, py = i => Math.floor(indices[i] / size);
+    (function rdp(a, b) {
+      if (b - a < 2) return;
+      const ax = px(a), ay = py(a), bx = px(b), by = py(b);
+      const dx = bx - ax, dy = by - ay, len2 = dx * dx + dy * dy;
+      let best = -1, bestD = tolerance;
+      for (let i = a + 1; i < b; i++) {
+        const t = len2 ? Math.max(0, Math.min(1, ((px(i) - ax) * dx + (py(i) - ay) * dy) / len2)) : 0;
+        const d = Math.hypot(px(i) - ax - t * dx, py(i) - ay - t * dy);
+        if (d > bestD) { bestD = d; best = i; }
+      }
+      if (best < 0) return;
+      keep[best] = 1;
+      rdp(a, best); rdp(best, b);
+    })(0, indices.length - 1);
+    const simp = [];
+    for (let i = 0; i < indices.length; i++) if (keep[i]) simp.push(indices[i]);
+    const segmentInside = (a, b) => {
+      // Stroke points are pixel centres (+0.5), so sample the same line
+      // the test's checkInside samples, not the integer grid line.
+      const ax = a % size + .5, ay = Math.floor(a / size) + .5, bx = b % size + .5, by = Math.floor(b / size) + .5;
+      const steps = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay) * 4));
+      for (let j = 0; j <= steps; j++) {
+        const x = Math.floor(ax + (bx - ax) * j / steps), y = Math.floor(ay + (by - ay) * j / steps);
+        if (x < 0 || y < 0 || x >= size || y >= size || !inside[y * size + x]) return false;
+      }
+      return true;
+    };
+    const out = [simp[0]];
+    for (let i = 1; i < simp.length; i++) {
+      if (segmentInside(simp[i - 1], simp[i])) { out.push(simp[i]); continue; }
+      const ia = indices.indexOf(simp[i - 1]), ib = indices.indexOf(simp[i]);
+      for (let j = ia + 1; j < ib; j++) out.push(indices[j]);
+      out.push(simp[i]);
+    }
+    return out;
+  }
+
   // edgeGap is the distance, in raster pixels along the hatch direction,
   // between a hatch endpoint and the shape edge. It is independent of
   // spacing, which sets the distance between hatch lines. 0 puts the
@@ -260,9 +318,15 @@
       // Walk the ring the short way around between the two nearest points.
       const forward = (best.prefix[best.bi] - best.prefix[best.ai] + best.total) % best.total;
       const dir = forward <= best.total - forward ? 1 : -1;
-      const path = [...jogA];
-      for (let k = best.ai; k !== best.bi; k = (k + dir + best.ring.length) % best.ring.length) path.push(best.ring[k]);
-      path.push(best.ring[best.bi], ...jogB);
+      const arc = [];
+      for (let k = best.ai; k !== best.bi; k = (k + dir + best.ring.length) % best.ring.length) arc.push(best.ring[k]);
+      arc.push(best.ring[best.bi]);
+      // Smooth the staircase out of the drawn connector: the ring is a
+      // chain of pixel centres, so without this the connector zigzags
+      // along the wall one pixel at a time. Only the arc is smoothed;
+      // the jogs to the run endpoints stay as they are.
+      const smoothArc = simplifyPath(arc, size, inside);
+      const path = [...jogA, ...smoothArc.slice(1), ...jogB.slice(1)];
       // The jogs may wander a little off the straight line; measure the
       // path as drawn and lift if it ran long after all. Same staircase
       // allowance as above.
