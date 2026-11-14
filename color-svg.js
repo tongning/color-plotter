@@ -101,7 +101,7 @@
     return pieces;
   }
 
-  async function importSvg(text, hatchStrokes, fillSpacing) {
+  async function importSvg(text, fillStrokes) {
     const parsed = new DOMParser().parseFromString(text, "image/svg+xml");
     const source = parsed.documentElement;
     if (source.localName !== "svg" || parsed.querySelector("parsererror")) throw new Error("This file is not a valid SVG.");
@@ -204,17 +204,12 @@
         } finally { if (original !== null) element.setAttribute("d", original); }
         if (fill) {
           context.clearRect(0, 0, SIZE, SIZE); context.beginPath();
-          let perimeter = 0;
           for (const points of outlines) {
             context.moveTo(points[0].x * SIZE, points[0].y * SIZE);
             for (let i = 1; i < points.length; i++) {
-              const a = points[i - 1], b = points[i];
+              const b = points[i];
               context.lineTo(b.x * SIZE, b.y * SIZE);
-              perimeter += Math.hypot(b.x - a.x, b.y - a.y) * SIZE;
             }
-            // SVG fill implicitly closes open subpaths; include that edge in the perimeter.
-            const first = points[0], last = points[points.length - 1];
-            perimeter += Math.hypot(first.x - last.x, first.y - last.y) * SIZE;
             context.closePath();
           }
           context.fillStyle = "#000"; context.fill(style.fillRule === "evenodd" ? "evenodd" : "nonzero");
@@ -226,13 +221,9 @@
             mask[i] = inside ? 1 : 0;
             if (inside) area++;
           }
-          // area / perimeter estimates average filled width in raster pixels.
-          // Two hatch spacings is the minimum useful width for a filled region.
-          const minimumWidth = Number.isFinite(fillSpacing) && fillSpacing > 0 ? fillSpacing * 2 : 0;
-          const averageWidth = perimeter > 0 ? area / perimeter : 0;
-          if (averageWidth >= minimumWidth && area > 0) {
-            for (const hatch of hatchStrokes(mask)) add(hatch, fill);
-          }
+          // Plot solid areas as connected fills and narrow traced ink as
+          // centerlines. True SVG stroke geometry below remains vector-based.
+          if (area > 0) for (const path of fillStrokes(mask)) add(path, fill);
         }
         if (stroke) for (const points of outlines) for (const piece of clipPolyline(points)) add(piece, stroke);
       }

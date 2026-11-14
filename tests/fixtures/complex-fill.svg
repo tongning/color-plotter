@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 480">
+  <!-- A ring, a deeply concave comb, and a thin filled stroke. -->
+  <path fill="#e53935" fill-rule="evenodd" d="M20 20H220V220H20Z M75 75H165V165H75Z"/>
+  <path fill="#3367d6" d="M260 20H300V170H320V20H360V170H380V20H420V170H440V20H460V220H260Z"/>
+  <path fill="#2e9d52" d="M30 280H31V450H30Z"/>
+</svg>

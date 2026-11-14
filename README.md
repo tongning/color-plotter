@@ -27,10 +27,10 @@ Each stroke is sent as:
 
 ```gcode
 G0 X… Y… F…
-M280 P0 S115
+M280 P0 S168
 G4 P25
 G1 X… Y… F…
-M280 P0 S95
+M280 P0 S150
 G4 P25
 ```
 
@@ -61,10 +61,10 @@ The plotter uses eight marker tools, `T0` through `T7`. Choose **Import a color 
 
 SVG source colors are matched to the closest configured marker using OKLab color distance. The canvas previews those matched colors, and the color assignment chips show which tool each source color uses. Changing a swatch updates the preview and generated G-code. Clicking a `T` button selects the marker for new drawing strokes, fills, and selfies.
 
-The importer supports paths (including curves and separate subpaths), rectangles, circles, ellipses, lines, polylines and polygons, group transforms, inherited styles, and CSS solid colors. Artwork fits within the square canvas with its aspect ratio preserved. Solid fills become diagonal hatch lines, including holes defined by fill rules; stroked outlines become pen paths. Stroke widths are represented by the physical marker width. Generated jobs group paths by their matched marker to minimize tool swaps. Markers run in the order they first appear in the drawing, with path order preserved within each marker group. This can change layering at overlaps, where marker strokes can blend on paper. White is matched like any other source color; remove white background shapes if they should remain blank paper.
+The importer supports paths (including curves and separate subpaths), rectangles, circles, ellipses, lines, polylines and polygons, group transforms, inherited styles, and CSS solid colors. Artwork fits within the square canvas with its aspect ratio preserved. Solid fills become connected diagonal hatch paths, including holes defined by fill rules. Nearby unfinished hatch segments are joined by short routes inside the filled region, keeping the pen down within each connected region and avoiding repeated perimeter laps. Separate islands require pen lifts. Narrow filled ribbons, such as outlines exported by bitmap tracers with `stroke="none"`, are thinned into single centerline paths instead of zigzag hatching. This is decided per connected region, so separate solid areas in the same SVG still fill normally. True SVG stroked outlines retain their vector geometry. Stroke widths are represented by the physical marker width. Generated jobs group paths by their matched marker to minimize tool swaps. Markers run in the order they first appear in the drawing, with path order preserved within each marker group. This can change layering at overlaps, where marker strokes can blend on paper. White is matched like any other source color; remove white background shapes if they should remain blank paper.
 
-Convert text and symbols to paths before importing. Gradients, patterns, embedded images, clipping, masks, filters, dashed strokes and arrow markers are rejected with an explanatory message. Imports are limited to 2 MB, 500 generated strokes and 50,000 sampled points. Scripts and event handlers are stripped, and SVG processing is isolated from the app with external resources blocked.
+Convert text and symbols to paths before importing. Gradients, patterns, embedded images, clipping, masks, filters, dashed strokes and arrow markers are rejected with an explanatory message. SVG file uploads are limited to 2 MB. Public gallery saves allow up to 500 strokes and 50,000 points per drawing. Scripts and event handlers are stripped, and SVG processing is isolated from the app with external resources blocked.
 
 Jobs lift the pen, wait for queued moves with `M400`, select the required marker using `T0`–`T7`, then lift the pen again before traveling to the next path. All paths assigned to the same marker share one tool selection, even when their source SVG colors differ. Each used marker is selected once per job. Grouping happens when G-code is generated for preview, download or upload; it does not reorder the editable canvas strokes or undo history. The final machine commands are exactly `T-1`, `G28`, and `M84`; the previous servo park commands are no longer emitted. Pen-servo commands still lift and lower the pen during drawing; the Duet must have the corresponding tools and tool-change macros configured. Monochrome drawings without stored color use `T0` and end with the same unmount/home/motors-off sequence. Colors survive gallery saves, remixes, undo and erasing.
 
-Run the algorithm checks with `node --test tests/color.test.cjs` and the isolated gallery API test with `node --test tests/server.test.mjs`. Open `tests/browser.html` through the local server to run browser checks for conversion, color persistence, previews and generated tool changes. These checks do not contact the plotter.
+Run the algorithm checks with `node --test tests/color.test.cjs tests/fill.test.cjs` and the isolated gallery API test with `node --test tests/server.test.mjs`. Open `tests/browser.html` through the local server to run browser checks for conversion, color persistence, previews and generated tool changes. The regression artwork in `tests/fixtures/complex-fill.svg` includes a hole, concave branches and a thin fill. These checks do not contact the plotter.
