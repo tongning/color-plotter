@@ -34,7 +34,8 @@ const state = {
   activeStroke: null,
   undoStack: [],
   redoStack: [],
-  canvasSize: 0,
+  canvasWidth: 0,
+  canvasHeight: 0,
   sourceImage: null, // ImageData driving the squiggle sliders
   previewGcode: "",
   toastTimer: null,
@@ -252,6 +253,15 @@ function normalizedEventPoint(event) {
   };
 }
 
+// The bed's aspect ratio follows the drawing area settings, so a rectangle
+// on screen plots with the same proportions on the machine. Inline style
+// overrides the square default in styles.css.
+function updateBedAspect() {
+  const { width, height } = dimensions();
+  plottingBed.style.aspectRatio = `${width} / ${height}`;
+  resizeCanvas();
+}
+
 function resizeCanvas() {
   const rect = plottingBed.getBoundingClientRect();
   if (!rect.width) return; // view is hidden
@@ -261,11 +271,15 @@ function resizeCanvas() {
   canvas.style.width = `${rect.width}px`;
   canvas.style.height = `${rect.height}px`;
   ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-  state.canvasSize = rect.width;
+  state.canvasWidth = rect.width;
+  state.canvasHeight = rect.height;
   render();
 }
 
-function drawStrokeOn(targetContext, size, stroke, lineWidth = 1.35) {
+// The bed is not necessarily square, so x and y scale separately.
+// height defaults to size for the square offscreen rasters (fill mask,
+// previews), which work in normalized coordinates.
+function drawStrokeOn(targetContext, size, stroke, lineWidth = 1.35, height = size) {
   if (!stroke.length) return;
   targetContext.strokeStyle = inkForStroke(stroke);
   targetContext.lineWidth = lineWidth;
@@ -274,36 +288,36 @@ function drawStrokeOn(targetContext, size, stroke, lineWidth = 1.35) {
   targetContext.beginPath();
   if (stroke.length === 1) {
     targetContext.fillStyle = inkForStroke(stroke);
-    targetContext.arc(stroke[0].x * size, stroke[0].y * size, Math.max(.68, lineWidth / 2), 0, Math.PI * 2);
+    targetContext.arc(stroke[0].x * size, stroke[0].y * height, Math.max(.68, lineWidth / 2), 0, Math.PI * 2);
     targetContext.fill();
     return;
   }
   if (stroke.shape) {
-    targetContext.moveTo(stroke[0].x * size, stroke[0].y * size);
+    targetContext.moveTo(stroke[0].x * size, stroke[0].y * height);
     for (let index = 1; index < stroke.length; index += 1) {
-      targetContext.lineTo(stroke[index].x * size, stroke[index].y * size);
+      targetContext.lineTo(stroke[index].x * size, stroke[index].y * height);
     }
     targetContext.stroke();
     return;
   }
   // Quadratic curves through segment midpoints keep the live line smooth.
-  targetContext.moveTo(stroke[0].x * size, stroke[0].y * size);
+  targetContext.moveTo(stroke[0].x * size, stroke[0].y * height);
   for (let i = 1; i < stroke.length - 1; i += 1) {
     const midX = (stroke[i].x + stroke[i + 1].x) / 2 * size;
-    const midY = (stroke[i].y + stroke[i + 1].y) / 2 * size;
-    targetContext.quadraticCurveTo(stroke[i].x * size, stroke[i].y * size, midX, midY);
+    const midY = (stroke[i].y + stroke[i + 1].y) / 2 * height;
+    targetContext.quadraticCurveTo(stroke[i].x * size, stroke[i].y * height, midX, midY);
   }
   const last = stroke[stroke.length - 1];
-  targetContext.lineTo(last.x * size, last.y * size);
+  targetContext.lineTo(last.x * size, last.y * height);
   targetContext.stroke();
 }
 
 function drawStroke(stroke) {
-  drawStrokeOn(ctx, state.canvasSize, stroke);
+  drawStrokeOn(ctx, state.canvasWidth, stroke, 1.35, state.canvasHeight);
 }
 
 function render() {
-  ctx.clearRect(0, 0, state.canvasSize, state.canvasSize);
+  ctx.clearRect(0, 0, state.canvasWidth, state.canvasHeight);
   state.strokes.forEach((stroke) => drawStroke(stroke));
   if (state.activeStroke) drawStroke(state.activeStroke);
 }
@@ -2296,6 +2310,7 @@ for (const input of [$("#workWidth"), $("#workHeight"), $("#drawFeed"), $("#trav
   input.addEventListener("input", () => {
     $("#drawFeedValue").textContent = `${feeds().draw} mm/min`;
     $("#travelFeedValue").textContent = `${feeds().travel} mm/min`;
+    if (input.id === "workWidth" || input.id === "workHeight") updateBedAspect();
     updateUi();
   });
 }
@@ -2408,6 +2423,6 @@ $("#svgFile").addEventListener("change", async (event) => {
 
 window.addEventListener("resize", resizeCanvas);
 showView("splash");
-resizeCanvas();
+updateBedAspect();
 updateUi();
 logLine("APP", `Small Plotter started (${navigator.userAgent}; page=${window.location.protocol})`);

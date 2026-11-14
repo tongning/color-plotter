@@ -297,6 +297,7 @@ button.ghost:hover { background: #e8ebf2; }
 .plotting-bed {
   position: relative;
   width: min(92vw, 64vh, 620px);
+  max-height: 80vh;
   aspect-ratio: 1 / 1;
   background: var(--card);
   border: 2px solid var(--line);
