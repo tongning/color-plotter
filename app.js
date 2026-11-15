@@ -2121,6 +2121,23 @@ $("#saveDrawingModal").addEventListener("click", (event) => {
 });
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !$("#saveDrawingModal").classList.contains("hidden")) closeSaveDrawingModal();
+  // Drawing-tool and marker shortcuts. Only on the draw view, and never
+  // while typing in a field, holding a modifier, or with a dialog open.
+  // Tools: P pencil, L line, R rectangle, E ellipse, F fill, X eraser.
+  // Markers: 1-8 pick T0-T7.
+  if (event.ctrlKey || event.metaKey || event.altKey) return;
+  if (views.draw.classList.contains("hidden")) return;
+  if (!$("#saveDrawingModal").classList.contains("hidden")) return;
+  const target = event.target;
+  if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable)) return;
+  const toolKeys = { p: "pencil", l: "line", r: "rectangle", e: "ellipse", f: "fill", x: "eraser" };
+  const key = event.key.toLowerCase();
+  if (toolKeys[key]) { setDrawingTool(toolKeys[key]); return; }
+  if (/^[1-8]$/.test(key)) {
+    activeMarker = Number(key) - 1;
+    updateMarkerSelection();
+    if (state.sourceImage) regenerateSquiggle();
+  }
 });
 $("#gallerySort").addEventListener("change", loadGallery);
 $("#deleteAllDrawings").addEventListener("click", deleteAllGalleryDrawings);
@@ -2370,7 +2387,8 @@ for (let tool = 0; tool < 8; tool++) {
   chip.className = "color-chip";
   chip.style.backgroundColor = markerPalette[tool];
   button.prepend(chip);
-  button.setAttribute("aria-label", `Draw with marker T${tool}`);
+  button.setAttribute("aria-label", `Draw with marker T${tool} (press ${tool + 1})`);
+  button.title = `Draw with marker T${tool} (press ${tool + 1})`;
   button.addEventListener("click", () => {
     activeMarker = tool;
     updateMarkerSelection();
