@@ -437,7 +437,7 @@
   }
   // Traced line art often encodes an ink line as a narrow filled ribbon.
   // Separate those components from solid areas before deciding how to plot them.
-  function svgFillStrokes(mask, size, spacing, edgeGap = 0, connectMax = 4 * spacing) {
+  function svgFillStrokes(mask, size, spacing, edgeGap = 0, connectMax = 4 * spacing, outlines) {
     const total = size * size;
     const depth = new Float32Array(total);
     const root2 = Math.SQRT2;
@@ -471,7 +471,33 @@
       const target=core/tail<=.05?narrow:solid;
       for(let j=0;j<tail;j++) target[queue[j]]=1;
     }
-    return [...centerlineStrokes(narrow,size),...hatchStrokes(solid,size,spacing,edgeGap,connectMax)];
+    const centerlines = centerlineStrokes(narrow, size);
+    // Vector-hatch the solid parts from the SVG outlines when the element
+    // is entirely solid (no narrow ribbons): the outlines are the fill
+    // boundaries, so the hatch gets sub-pixel endpoints and smooth
+    // connectors instead of a pixel staircase. The outlines need no
+    // inward offset (unlike the canvas fill, where the loop is a stroke
+    // centreline): they already are the fill edge. When the element has
+    // narrow parts, or no outlines were passed, hatch the solid mask on
+    // the raster as before. The vector module loads after this one, so
+    // read it off the global at call time (no circular require).
+    let solidStrokes = [];
+    const hasNarrow = narrow.some((v) => v);
+    const vectorFill = typeof globalThis !== "undefined" ? globalThis.PlotterVectorFill : null;
+    if (outlines && outlines.length && !hasNarrow && vectorFill && vectorFill.hatchPolygons) {
+      const polygons = outlines
+        .map((pts) => pts.map((p) => ({ x: p.x * size, y: p.y * size })))
+        .filter((poly) => poly.length >= 3);
+      if (polygons.length) {
+        try {
+          solidStrokes = vectorFill.hatchPolygons(polygons, size, spacing, edgeGap, connectMax) || [];
+        } catch (e) {
+          solidStrokes = [];
+        }
+      }
+    }
+    if (!solidStrokes.length) solidStrokes = hatchStrokes(solid, size, spacing, edgeGap, connectMax);
+    return [...centerlines, ...solidStrokes];
   }
 
   function centerlineStrokes(mask, size) {

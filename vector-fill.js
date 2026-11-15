@@ -428,7 +428,7 @@
     return hatch.length ? hatch : null;
   }
 
-  const api = { vectorHatch, _test: { flattenStroke, dilate, boundaryStrokeIndices, signedArea, offsetPolygon, vectorLoop, polygonRuns, polygonArc, hatchPolygons } };
+  const api = { vectorHatch, hatchPolygons, _test: { flattenStroke, dilate, boundaryStrokeIndices, signedArea, offsetPolygon, vectorLoop, polygonRuns, polygonArc, hatchPolygons } };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else window.PlotterVectorFill = api;
 })();

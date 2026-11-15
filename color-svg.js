@@ -222,8 +222,9 @@
             if (inside) area++;
           }
           // Plot solid areas as connected fills and narrow traced ink as
-          // centerlines. True SVG stroke geometry below remains vector-based.
-          if (area > 0) for (const path of fillStrokes(mask)) add(path, fill);
+          // centerlines. The outlines are the vector fill boundaries, so
+          // pass them through for a vector hatch of the solid parts.
+          if (area > 0) for (const path of fillStrokes(mask, outlines)) add(path, fill);
         }
         if (stroke) for (const points of outlines) for (const piece of clipPolyline(points)) add(piece, stroke);
       }

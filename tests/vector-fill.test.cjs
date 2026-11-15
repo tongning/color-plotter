@@ -1,6 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { vectorHatch } = require('../vector-fill.js');
+const VectorFill = require('../vector-fill.js');
+const { vectorHatch } = VectorFill;
+// svgFillStrokes reads the vector module off the global at call time
+// (it loads before vector-fill.js, so no circular require).
+globalThis.PlotterVectorFill = VectorFill;
+const { svgFillStrokes } = require('../fill-path.js');
 const size = 96;
 const spacing = 2.5, edgeGap = -0.5, connectMax = 4 * spacing;
 
@@ -155,4 +160,117 @@ test('no boundary strokes returns null so the caller falls back to raster', () =
   for (let y = 20; y < 76; y++) for (let x = 20; x < 76; x++) mask[y * size + x] = 1;
   const covered = new Uint8Array(size * size);
   assert.equal(vectorHatch([], covered, mask, size, spacing, edgeGap, connectMax), null);
+});
+
+// --- SVG import: solid parts vector-hatch from the outlines ---
+
+function outlineFrom(poly) {
+  return poly.map((p) => ({ x: p.x / size, y: p.y / size }));
+}
+// Mask for a filled SVG element: the polygon interior (the rasterizer
+// fills the outline with the element's fill rule).
+function svgMask(polys) {
+  const mask = new Uint8Array(size * size);
+  const inPoly = (px, py, poly) => {
+    let c = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const xi = poly[i].x, yi = poly[i].y, xj = poly[j].x, yj = poly[j].y;
+      if (((yi > py) !== (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi)) c = !c;
+    }
+    return c;
+  };
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+    let c = false;
+    for (const poly of polys) if (inPoly(x + .5, y + .5, poly)) c = !c;
+    mask[y * size + x] = c ? 1 : 0;
+  }
+  return mask;
+}
+
+test('SVG solid rect vector-hatches from its outline', () => {
+  const rect = [{ x: 20, y: 20 }, { x: 76, y: 20 }, { x: 76, y: 76 }, { x: 20, y: 76 }];
+  const mask = svgMask([rect]);
+  const strokes = svgFillStrokes(mask, size, spacing, edgeGap, connectMax, [outlineFrom([...rect, rect[0]])]);
+  assert.equal(strokes.length, 1);
+  for (const st of strokes) assert.equal(st.shape, true);
+  // The hatch covers the solid area.
+  const covered = new Uint8Array(size * size);
+  for (const st of strokes) for (let i = 1; i < st.length; i++) {
+    const a = st[i - 1], b = st[i];
+    const steps = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) * size * 4));
+    for (let j = 0; j <= steps; j++) {
+      covered[Math.floor((a.y + (b.y - a.y) * j / steps) * size) * size + Math.floor((a.x + (b.x - a.x) * j / steps) * size)] = 1;
+    }
+  }
+  const step = Math.round(spacing * Math.SQRT2);
+  for (let offset = -(size - 1); offset < size; offset += step) {
+    for (let y = Math.max(0, -offset); y <= Math.min(size - 1, size - 1 - offset); y++) {
+      const i = y * size + y + offset;
+      if (mask[i]) assert.equal(covered[i], 1, `missing hatch pixel ${i % size},${y}`);
+    }
+  }
+});
+
+test('SVG solid circle vector-hatches with a smooth edge', () => {
+  const circ = [];
+  for (let k = 0; k < 64; k++) {
+    const a = k / 64 * 2 * Math.PI;
+    circ.push({ x: 48 + 28 * Math.cos(a), y: 48 + 28 * Math.sin(a) });
+  }
+  const mask = svgMask([circ]);
+  const strokes = svgFillStrokes(mask, size, spacing, edgeGap, connectMax, [outlineFrom([...circ, circ[0]])]);
+  assert.equal(strokes.length, 1);
+  // The drawn stroke near the boundary hugs the true circle (radius 28).
+  // The raster hatch stair-steps up to ~0.7px off the edge on average;
+  // the vector edge stays well inside that.
+  let max = 0, sum = 0, n = 0;
+  for (const st of strokes) for (const p of st) {
+    const r = Math.hypot(p.x * size - 48, p.y * size - 48);
+    const d = Math.abs(r - 28);
+    if (d < 3) { max = Math.max(max, d); sum += d; n++; }
+  }
+  assert.ok(n > 0, 'no boundary points found');
+  assert.ok(sum / n < 0.5, `mean edge deviation ${sum / n} px`);
+  assert.ok(max < 1.1, `worst edge deviation ${max} px`);
+});
+
+test('SVG donut keeps its hole empty', () => {
+  const outer = [{ x: 8, y: 8 }, { x: 88, y: 8 }, { x: 88, y: 88 }, { x: 8, y: 88 }];
+  const inner = [{ x: 30, y: 30 }, { x: 66, y: 30 }, { x: 66, y: 66 }, { x: 30, y: 66 }];
+  const mask = svgMask([outer, inner]);
+  const strokes = svgFillStrokes(mask, size, spacing, edgeGap, connectMax,
+    [outlineFrom([...outer, outer[0]]), outlineFrom([...inner, inner[0]])]);
+  assert.ok(strokes.length >= 1);
+  // No drawn segment may enter the hole, beyond the 0.5px skin overlap
+  // that pushes run endpoints just past the hole's edge (the same
+  // overlap the raster hatch applies at the outer edge).
+  for (const st of strokes) for (let i = 1; i < st.length; i++) {
+    const a = st[i - 1], b = st[i];
+    const steps = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) * size * 4));
+    for (let j = 0; j <= steps; j++) {
+      const x = Math.floor((a.x + (b.x - a.x) * j / steps) * size);
+      const y = Math.floor((a.y + (b.y - a.y) * j / steps) * size);
+      assert.ok(!(x >= 31 && x < 65 && y >= 31 && y < 65), `segment entered the hole at ${x},${y}`);
+    }
+  }
+});
+
+test('SVG narrow ribbon falls back to raster centerlines', () => {
+  // A 3px-wide ribbon: the distance transform classifies it narrow, so
+  // it is centerlined on the raster, not vector-hatched.
+  const ribbon = [{ x: 8, y: 46 }, { x: 88, y: 46 }, { x: 88, y: 50 }, { x: 8, y: 50 }];
+  const mask = svgMask([ribbon]);
+  const withOutlines = svgFillStrokes(mask, size, spacing, edgeGap, connectMax, [outlineFrom([...ribbon, ribbon[0]])]);
+  const withoutOutlines = svgFillStrokes(mask, size, spacing, edgeGap, connectMax);
+  assert.ok(withOutlines.length > 0);
+  // Identical to the raster-only path: the vector hatch was not used.
+  assert.equal(JSON.stringify(withOutlines), JSON.stringify(withoutOutlines));
+});
+
+test('SVG without outlines falls back to the raster hatch', () => {
+  const rect = [{ x: 20, y: 20 }, { x: 76, y: 20 }, { x: 76, y: 76 }, { x: 20, y: 76 }];
+  const mask = svgMask([rect]);
+  const strokes = svgFillStrokes(mask, size, spacing, edgeGap, connectMax);
+  assert.ok(strokes.length >= 1);
+  for (const st of strokes) assert.equal(st.shape, true);
 });
