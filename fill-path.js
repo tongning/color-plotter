@@ -128,7 +128,18 @@
   // pixel staircase, so a connector may draw up to connectMax * sqrt(2)
   // along it on a 45-degree edge; that is the same short wall run, not
   // a longer threshold.
-  function hatchStrokes(inside, size, spacing, edgeGap = 0, connectMax = 4 * spacing) {
+  // `alpha` is the optional anti-aliased coverage (0-255 per pixel) of
+  // the strokes that bound the region. When it is given, a run endpoint
+  // is placed at the true (sub-pixel) boundary instead of a fixed
+  // extension: the pixel just beyond the endpoint is the first stroke
+  // pixel, and the boundary (alpha = 32, the coverage threshold) sits a
+  // fraction t of the way from the endpoint pixel centre to it. The
+  // endpoint extends to that crossing plus the requested overlap past
+  // the edge (-edgeGap), so the fill hugs the smooth wall instead of a
+  // pixel staircase. When there is no stroke pixel beyond the endpoint
+  // (a hole, or the canvas edge) the crossing is undefined and the
+  // endpoint falls back to the fixed extension.
+  function hatchStrokes(inside, size, spacing, edgeGap = 0, connectMax = 4 * spacing, alpha = null) {
     const total = size * size;
     const step = Math.max(1, Math.round(spacing * Math.SQRT2));
     // A run endpoint sits at its pixel centre; the edge along the diagonal
@@ -138,6 +149,22 @@
     // no segment can sample an outside pixel at a concave corner.
     const edgeExtension = Math.max(0, 0.5 * Math.SQRT2 - edgeGap);
     const cappedExtension = edgeGap < 0 ? edgeExtension : Math.min(0.6, edgeExtension);
+    // Euclidean extension (px along the diagonal) for the endpoint at
+    // `index`, whose outward direction along the run is `direction`
+    // (-1 for a run start, +1 for a run end). Runs go down-right, so the
+    // pixel beyond an endpoint is at (x + direction, y + direction).
+    function edgeExtensionFor(index, direction) {
+      if (!alpha) return cappedExtension;
+      const x = index % size, y = Math.floor(index / size);
+      const nx = x + direction, ny = y + direction;
+      if (nx < 0 || nx >= size || ny < 0 || ny >= size) return cappedExtension;
+      const a0 = alpha[index], a1 = alpha[ny * size + nx];
+      if (!(a1 > 32) || a0 > 32) return cappedExtension;
+      const t = Math.max(0, Math.min(1, (32 - a0) / (a1 - a0)));
+      const ext = t * Math.SQRT2 - edgeGap;
+      const capped = edgeGap < 0 ? ext : Math.min(0.6, ext);
+      return Math.max(0, capped);
+    }
     const labels = new Int32Array(total);
     const queue = new Int32Array(total);
     let component = 0;
@@ -428,7 +455,7 @@
           const point = { x: (index % size + .5) / size, y: (Math.floor(index / size) + .5) / size };
           const direction = edgePoints.get(index);
           if (direction) {
-            const offset = direction * cappedExtension / Math.SQRT2 / size;
+            const offset = direction * edgeExtensionFor(index, direction) / Math.SQRT2 / size;
             point.x += offset; point.y += offset;
           }
           return point;

@@ -33,6 +33,8 @@ const PERSISTED_SETTING_IDS = [
 const state = {
   strokes: [],
   activeStroke: null,
+  textPreview: null, // ghost text strokes under the cursor (text tool)
+  textPreviewPoint: null, // last hover point, so edits refresh the preview
   undoStack: [],
   redoStack: [],
   canvasWidth: 0,
@@ -506,6 +508,14 @@ function render() {
   ctx.clearRect(0, 0, state.canvasWidth, state.canvasHeight);
   state.strokes.forEach((stroke) => drawStroke(stroke));
   if (state.activeStroke) drawStroke(state.activeStroke);
+  // Ghost preview of where the text will land (text tool hover).
+  if (state.textPreview) {
+    ctx.save();
+    ctx.globalAlpha = 0.45;
+    ctx.setLineDash([5, 4]);
+    for (const stroke of state.textPreview) drawStroke(stroke);
+    ctx.restore();
+  }
 }
 
 function updateUi() {
@@ -1140,6 +1150,21 @@ function textStrokes(text, font, sizeMm, origin, width, height) {
   });
 }
 
+// The text strokes that would land at `point` with the current text,
+// font, and size inputs, in the active marker color. Null when there is
+// nothing to place. Shared by the hover preview and the click-to-place.
+function textPreviewStrokes(point) {
+  const text = $("#textInput").value;
+  if (!text.trim()) return null;
+  const font = window.PlotterHershey && window.PlotterHershey.fonts[$("#textFont").value];
+  const sizeMm = safeNumber($("#textSize").value, 10, 1);
+  const { width, height } = dimensions();
+  const strokes = textStrokes(text, font, sizeMm, point, width, height);
+  if (!strokes.length) return null;
+  for (const stroke of strokes) stroke.color = markerPalette[activeMarker];
+  return strokes;
+}
+
 function eraseStrokeAt(stroke, center) {
   if (!stroke.length) return null;
   const sampleSpacing = ERASER_RADIUS / 3;
@@ -1233,7 +1258,9 @@ function finishErasing(event) {
 /* ---------- fill (diagonal hatch) ---------- */
 
 // Strokes rasterized as region boundaries. Drawn thicker than on screen so
-// anti-aliased diagonals can't leak the flood fill.
+// anti-aliased diagonals can't leak the flood fill. Returns the binary
+// covered mask plus the raw alpha, so the hatch can place its endpoints
+// at the true (sub-pixel) boundary instead of a pixel staircase.
 function fillCoverageMask() {
   const size = FILL_RASTER;
   const raster = document.createElement("canvas");
@@ -1243,10 +1270,12 @@ function fillCoverageMask() {
   for (const stroke of state.strokes) drawStrokeOn(rasterCtx, size, stroke, 4);
   const { data } = rasterCtx.getImageData(0, 0, size, size);
   const covered = new Uint8Array(size * size);
+  const alpha = new Uint8Array(size * size);
   for (let index = 0; index < covered.length; index += 1) {
-    covered[index] = data[index * 4 + 3] > 32 ? 1 : 0;
+    alpha[index] = data[index * 4 + 3];
+    covered[index] = alpha[index] > 32 ? 1 : 0;
   }
-  return covered;
+  return { covered, alpha };
 }
 
 // 4-connected flood fill from the tapped pixel; returns the region mask, or
@@ -1273,8 +1302,8 @@ function floodRegion(covered, startX, startY) {
 }
 
 
-function hatchStrokes(inside) {
-  return PlotterFill.hatchStrokes(inside, FILL_RASTER, FILL_SPACING, FILL_EDGE_GAP, FILL_CONNECT_MAX);
+function hatchStrokes(inside, alpha = null) {
+  return PlotterFill.hatchStrokes(inside, FILL_RASTER, FILL_SPACING, FILL_EDGE_GAP, FILL_CONNECT_MAX, alpha);
 }
 
 
@@ -1286,14 +1315,15 @@ function fillAt(point) {
   const size = FILL_RASTER;
   const x = Math.min(size - 1, Math.floor(point.x * size));
   const y = Math.min(size - 1, Math.floor(point.y * size));
-  const covered = fillCoverageMask();
+  const { covered, alpha } = fillCoverageMask();
   const inside = floodRegion(covered, x, y);
-  // Vector fill from the stroke geometry (smooth edges); falls back to
-  // the raster hatch when no vector loop can be built.
+  // Raster hatch only, with sub-pixel edges: the run endpoints land on
+  // the true (anti-aliased) boundary instead of a pixel staircase, so
+  // the fill hugs the wall smoothly. No vector path: the raster hatch
+  // is the only fill, and it cannot hang on a curved hole boundary.
   let hatch = [];
   if (inside) {
-    hatch = PlotterVectorFill.vectorHatch(state.strokes, covered, inside, size, FILL_SPACING, FILL_EDGE_GAP, FILL_CONNECT_MAX)
-      || hatchStrokes(inside);
+    hatch = hatchStrokes(inside, alpha);
   }
   if (!hatch.length) {
     showToast("Tap an open area to fill it.", "error");
@@ -1311,6 +1341,8 @@ function fillAt(point) {
 function setDrawingTool(tool) {
   if (!["pencil", "line", "rectangle", "ellipse", "fill", "eraser", "text"].includes(tool)) return;
   state.drawingTool = tool;
+  state.textPreview = null;
+  state.textPreviewPoint = null;
   plottingBed.classList.toggle("using-eraser", tool === "eraser");
   $("#textOptions").classList.toggle("hidden", tool !== "text");
   for (const button of $$('[data-drawing-tool]')) {
@@ -1344,14 +1376,12 @@ canvas.addEventListener("pointerdown", (event) => {
   if (state.drawingTool === "text") {
     const text = $("#textInput").value;
     if (!text.trim()) { showToast("Type some text first.", "error"); return; }
-    const font = window.PlotterHershey && window.PlotterHershey.fonts[$("#textFont").value];
-    const sizeMm = safeNumber($("#textSize").value, 10, 1);
-    const { width, height } = dimensions();
-    const strokes = textStrokes(text, font, sizeMm, point, width, height);
-    if (!strokes.length) { showToast("Nothing to place.", "error"); return; }
+    const strokes = textPreviewStrokes(point);
+    if (!strokes) { showToast("Nothing to place.", "error"); return; }
+    state.textPreview = null;
+    state.textPreviewPoint = null;
     snapshot();
     markGalleryCopyEdited();
-    for (const stroke of strokes) stroke.color = markerPalette[activeMarker];
     state.strokes = state.strokes.concat(strokes);
     render();
     updateUi();
@@ -1370,6 +1400,14 @@ canvas.addEventListener("pointermove", (event) => {
     event.preventDefault();
     const coalesced = event.getCoalescedEvents ? event.getCoalescedEvents() : [];
     for (const pointEvent of coalesced.length ? coalesced : [event]) eraseTo(normalizedEventPoint(pointEvent));
+    return;
+  }
+  // Text tool: preview where the text will land while hovering.
+  if (state.drawingTool === "text" && !state.activeStroke) {
+    const point = normalizedEventPoint(event);
+    state.textPreviewPoint = point;
+    state.textPreview = textPreviewStrokes(point);
+    render();
     return;
   }
   if (!state.activeStroke) return;
@@ -1403,9 +1441,25 @@ function finishStroke(event) {
 
 canvas.addEventListener("pointerup", finishStroke);
 canvas.addEventListener("pointercancel", finishStroke);
+canvas.addEventListener("pointerleave", () => {
+  if (state.textPreview || state.textPreviewPoint) {
+    state.textPreview = null;
+    state.textPreviewPoint = null;
+    render();
+  }
+});
 
 for (const button of $$('[data-drawing-tool]')) {
   button.addEventListener("click", () => setDrawingTool(button.dataset.drawingTool));
+}
+
+// Editing the text, font, or size refreshes the hover preview in place.
+for (const input of [$("#textInput"), $("#textFont"), $("#textSize")]) {
+  input.addEventListener("input", () => {
+    if (state.drawingTool !== "text" || !state.textPreviewPoint) return;
+    state.textPreview = textPreviewStrokes(state.textPreviewPoint);
+    render();
+  });
 }
 
 function undo() {

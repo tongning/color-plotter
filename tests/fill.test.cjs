@@ -216,3 +216,35 @@ test('raster hatch fills an elliptical annulus (hole) without hanging', () => {
   checkInside(strokes, mask);
   checkCoverage(strokes, mask);
 });
+
+test('raster hatch endpoints land on the sub-pixel boundary when alpha is given', () => {
+  // A diagonal boundary (region x+y < 60). The hatch runs are diagonal too,
+  // so run endpoints meet this edge. With alpha 0 inside and 128 in the
+  // stroke band just outside, the alpha=32 crossing sits t=0.25 of the way
+  // from the endpoint pixel centre toward the stroke pixel. The endpoint
+  // must land there (plus the 0.5px overlap past the edge), not at the
+  // fixed pixel-edge extension (t=0.5). Without alpha it falls back to
+  // the fixed extension.
+  const diag = (withAlpha) => {
+    const inside = new Uint8Array(size * size);
+    const alpha = new Uint8Array(size * size);
+    for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+      const i = y * size + x;
+      if (x + y < 60) { inside[i] = 1; alpha[i] = 0; }
+      else if (x + y < 62) { alpha[i] = 128; }
+      else alpha[i] = 0;
+    }
+    return hatchStrokes(inside, size, 2, -0.5, 8, withAlpha ? alpha : null);
+  };
+  const maxSum = (strokes) => {
+    let m = -Infinity;
+    for (const s of strokes) for (const p of s) m = Math.max(m, p.x + p.y);
+    return m;
+  };
+  const a = maxSum(diag(true)), b = maxSum(diag(false));
+  // Per-coordinate the sub-pixel endpoint is 0.25px short of the fixed
+  // one; the x+y sum differs by 0.5px = 0.5/size.
+  assert.ok(Math.abs((b - a) - 0.5 / size) < 1e-9, `sub-pixel edge off by ${(b - a) * size}px, want 0.5px`);
+  // And the sub-pixel endpoint stays inside the stroke band (edge 60..62).
+  assert.ok(a * size < 62, `endpoint overshot the stroke: ${a * size}px`);
+});
