@@ -1098,6 +1098,48 @@ function shapeStroke(tool, start, end, shift = false) {
   return points;
 }
 
+// Convert a string to plotter strokes using a vendored Hershey single-line
+// font (`font` is one entry of PlotterHershey.fonts). `sizeMm` is the cap
+// height in mm; the text's top-left lands at `origin` (normalized). Each
+// Hershey stroke becomes one app stroke (shape=true, so it is plotted as
+// drawn, not freehand-smoothed). Characters are laid out left to right by
+// their advance; an unknown character falls back to '?' then a space.
+function textStrokes(text, font, sizeMm, origin, width, height) {
+  if (!font || !text) return [];
+  const hGlyph = font["H"];
+  let capH = 21;
+  if (hGlyph && hGlyph.s.length) {
+    const ys = hGlyph.s.flat().map((point) => point[1]);
+    if (ys.length) capH = Math.max(...ys) - Math.min(...ys);
+  }
+  if (!(capH > 0)) capH = 21;
+  const scale = sizeMm / capH; // mm per Hershey unit
+  const laidOut = [];
+  let penX = 0;
+  for (const ch of text) {
+    const glyph = font[ch] || font["?"];
+    if (!glyph) { penX += 16; continue; }
+    for (const stroke of glyph.s) {
+      laidOut.push(stroke.map(([x, y]) => [x + penX - glyph.l, y]));
+    }
+    penX += glyph.a;
+  }
+  if (!laidOut.length) return [];
+  let minX = Infinity, minY = Infinity;
+  for (const stroke of laidOut) for (const [x, y] of stroke) {
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+  }
+  return laidOut.map((stroke) => {
+    const points = stroke.map(([x, y]) => ({
+      x: origin.x + (x - minX) * scale / width,
+      y: origin.y + (y - minY) * scale / height,
+    }));
+    points.shape = true;
+    return points;
+  });
+}
+
 function eraseStrokeAt(stroke, center) {
   if (!stroke.length) return null;
   const sampleSpacing = ERASER_RADIUS / 3;
@@ -1267,9 +1309,10 @@ function fillAt(point) {
 }
 
 function setDrawingTool(tool) {
-  if (!["pencil", "line", "rectangle", "ellipse", "fill", "eraser"].includes(tool)) return;
+  if (!["pencil", "line", "rectangle", "ellipse", "fill", "eraser", "text"].includes(tool)) return;
   state.drawingTool = tool;
   plottingBed.classList.toggle("using-eraser", tool === "eraser");
+  $("#textOptions").classList.toggle("hidden", tool !== "text");
   for (const button of $$('[data-drawing-tool]')) {
     const active = button.dataset.drawingTool === tool;
     button.classList.toggle("active", active);
@@ -1296,6 +1339,23 @@ canvas.addEventListener("pointerdown", (event) => {
   }
   if (state.drawingTool === "fill") {
     fillAt(point);
+    return;
+  }
+  if (state.drawingTool === "text") {
+    const text = $("#textInput").value;
+    if (!text.trim()) { showToast("Type some text first.", "error"); return; }
+    const font = window.PlotterHershey && window.PlotterHershey.fonts[$("#textFont").value];
+    const sizeMm = safeNumber($("#textSize").value, 10, 1);
+    const { width, height } = dimensions();
+    const strokes = textStrokes(text, font, sizeMm, point, width, height);
+    if (!strokes.length) { showToast("Nothing to place.", "error"); return; }
+    snapshot();
+    markGalleryCopyEdited();
+    for (const stroke of strokes) stroke.color = markerPalette[activeMarker];
+    state.strokes = state.strokes.concat(strokes);
+    render();
+    updateUi();
+    logLine("DRAW", `text placed ${strokes.length} strokes`);
     return;
   }
   state.shapeStart = point;
@@ -2370,14 +2430,14 @@ window.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !$("#saveDrawingModal").classList.contains("hidden")) closeSaveDrawingModal();
   // Drawing-tool and marker shortcuts. Only on the draw view, and never
   // while typing in a field, holding a modifier, or with a dialog open.
-  // Tools: P pencil, L line, R rectangle, E ellipse, F fill, X eraser.
-  // Markers: 1-8 pick T0-T7.
+  // Tools: P pencil, L line, R rectangle, E ellipse, F fill, X eraser,
+  // T text. Markers: 1-8 pick T0-T7.
   if (event.ctrlKey || event.metaKey || event.altKey) return;
   if (views.draw.classList.contains("hidden")) return;
   if (!$("#saveDrawingModal").classList.contains("hidden")) return;
   const target = event.target;
   if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable)) return;
-  const toolKeys = { p: "pencil", l: "line", r: "rectangle", e: "ellipse", f: "fill", x: "eraser" };
+  const toolKeys = { p: "pencil", l: "line", r: "rectangle", e: "ellipse", f: "fill", x: "eraser", t: "text" };
   const key = event.key.toLowerCase();
   if (toolKeys[key]) { setDrawingTool(toolKeys[key]); return; }
   if (/^[1-8]$/.test(key)) {

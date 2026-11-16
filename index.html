@@ -175,8 +175,23 @@
           <button data-drawing-tool="ellipse" type="button" aria-pressed="false" title="Ellipse (E)">◯ Ellipse <span class="key-hint">E</span></button>
           <button data-drawing-tool="fill" type="button" aria-pressed="false" title="Fill (F)">▨ Fill <span class="key-hint">F</span></button>
           <button data-drawing-tool="eraser" type="button" aria-pressed="false" title="Eraser (X)">⌫ Eraser <span class="key-hint">X</span></button>
+          <button data-drawing-tool="text" type="button" aria-pressed="false" title="Text (T)">T Text <span class="key-hint">T</span></button>
         </div>
-        <p class="shortcut-help">Shortcuts: <span class="key-hint">P</span> pencil, <span class="key-hint">L</span> line, <span class="key-hint">R</span> rectangle, <span class="key-hint">E</span> ellipse, <span class="key-hint">F</span> fill, <span class="key-hint">X</span> eraser, <span class="key-hint">1</span>–<span class="key-hint">8</span> pick a marker. Hold <span class="key-hint">Shift</span> while dragging a line to snap it to 8 directions, or a rectangle/ellipse to make it a square/circle.</p>
+        <div class="text-options hidden" id="textOptions">
+          <input id="textInput" type="text" placeholder="Type text, then click the canvas to place it" aria-label="Text to place" autocomplete="off">
+          <label>Font
+            <select id="textFont" aria-label="Text font">
+              <option value="futural" selected>Sans (Helvetica-like)</option>
+              <option value="futuram">Avant Garde-like (bold sans)</option>
+              <option value="rowmans">Serif</option>
+              <option value="scripts">Script</option>
+            </select>
+          </label>
+          <label>Size (mm)
+            <input id="textSize" type="number" value="10" min="1" max="100" step="1" aria-label="Text size in millimetres">
+          </label>
+        </div>
+        <p class="shortcut-help">Shortcuts: <span class="key-hint">P</span> pencil, <span class="key-hint">L</span> line, <span class="key-hint">R</span> rectangle, <span class="key-hint">E</span> ellipse, <span class="key-hint">F</span> fill, <span class="key-hint">X</span> eraser, <span class="key-hint">T</span> text, <span class="key-hint">1</span>–<span class="key-hint">8</span> pick a marker. Hold <span class="key-hint">Shift</span> while dragging a line to snap it to 8 directions, or a rectangle/ellipse to make it a square/circle.</p>
 
         <div class="canvas-actions">
           <button id="undoButton" type="button" disabled>↩︎ Undo</button>
@@ -289,6 +304,7 @@
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
     <script src="fill-path.js"></script>
     <script src="vector-fill.js"></script>
+    <script src="hershey.js"></script>
     <script src="color-svg.js"></script>
     <script src="app.js"></script>
   </body>
