@@ -210,6 +210,175 @@ function smoothStroke(points) {
   return simplifyStroke(flattenFreehand(simplifyStroke(points)), 0.0004);
 }
 
+// Circle through three points (circumcenter). Null when collinear.
+// Points are in mm, so the direction below matches what the firmware sees.
+function circleThrough(a, b, c) {
+  const d = 2 * (a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y));
+  if (Math.abs(d) < 1e-9) return null;
+  const a2 = a.x * a.x + a.y * a.y;
+  const b2 = b.x * b.x + b.y * b.y;
+  const c2 = c.x * c.x + c.y * c.y;
+  const x = (a2 * (b.y - c.y) + b2 * (c.y - a.y) + c2 * (a.y - b.y)) / d;
+  const y = (a2 * (c.x - b.x) + b2 * (a.x - c.x) + c2 * (b.x - a.x)) / d;
+  return { x, y, r: Math.hypot(a.x - x, a.y - y) };
+}
+
+// Signed angle from `from` to `to` around `center`, in (-PI, PI].
+// Positive = counterclockwise in mm space (X right, Y up).
+function arcAngle(center, from, to) {
+  const a1 = Math.atan2(from.y - center.y, from.x - center.x);
+  const a2 = Math.atan2(to.y - center.y, to.x - center.x);
+  let d = a2 - a1;
+  while (d > Math.PI) d -= 2 * Math.PI;
+  while (d <= -Math.PI) d += 2 * Math.PI;
+  return d;
+}
+
+// True when the arc from angle a1 sweeping `signedAngle` radians stays
+// inside `bounds`. An arc can bulge outside the bed even when its
+// endpoints are inside (the fit tolerance lets it stray up to 0.1mm), and
+// RRF rejects the move with "intermediate position outside machine
+// limits". The x/y extrema of a circle sit at cardinal angles, so check
+// the endpoints plus any cardinal angle the sweep passes through.
+function arcStaysInBounds(center, radius, a1, signedAngle, bounds) {
+  if (!bounds) return true;
+  const TAU = Math.PI * 2;
+  const inB = (x, y) => x >= bounds.minX && x <= bounds.maxX && y >= bounds.minY && y <= bounds.maxY;
+  const pt = (a) => ({ x: center.x + radius * Math.cos(a), y: center.y + radius * Math.sin(a) });
+  const p1 = pt(a1), p2 = pt(a1 + signedAngle);
+  if (!inB(p1.x, p1.y) || !inB(p2.x, p2.y)) return false;
+  const distTo = (target) => {
+    let d = target - a1;
+    if (signedAngle > 0) { while (d < 0) d += TAU; }
+    else { while (d > 0) d -= TAU; }
+    return Math.abs(d);
+  };
+  for (const c of [0, Math.PI / 2, Math.PI, 3 * Math.PI / 2]) {
+    if (distTo(c) <= Math.abs(signedAngle) + 1e-9) {
+      const p = pt(c);
+      if (!inB(p.x, p.y)) return false;
+    }
+  }
+  // Belt and braces: sample along the sweep too, so a bulge between the
+  // cardinal angles (or a rounding shift in the emitted centre) can't
+  // slip an arc outside the bed.
+  const steps = Math.max(8, Math.ceil(Math.abs(signedAngle) * radius / 0.5));
+  for (let s = 1; s < steps; s++) {
+    const p = pt(a1 + signedAngle * s / steps);
+    if (!inB(p.x, p.y)) return false;
+  }
+  return true;
+}
+
+// Convert a polyline (mm) into line/arc moves. A run of points becomes
+// one G2/G3 arc when a circular arc through the run's endpoints stays
+// within `tolerance` of every point in the run and inside `bounds`.
+// Arcs have no internal junctions, so RepRapFirmware can hold speed
+// through them instead of braking at every short segment — which is what
+// makes curves sound choppy at a high speed override, where the plotter
+// is acceleration-limited and short segments never reach the target feed.
+// Straight runs stay G1 lines.
+function fitArcs(points, tolerance = 0.1, bounds = null) {
+  const moves = [];
+  let i = 0;
+  while (i < points.length - 1) {
+    let best = null;
+    // Longest run first, shrink until one fits.
+    for (let j = points.length - 1; j > i + 1; j--) {
+      const circle = circleThrough(points[i], points[Math.floor((i + j) / 2)], points[j]);
+      if (!circle || circle.r < 0.5 || circle.r > 500) continue;
+      const angle = arcAngle(circle, points[i], points[j]);
+      if (Math.abs(angle) >= Math.PI) continue; // firmware takes the minor arc
+      const a1 = Math.atan2(points[i].y - circle.y, points[i].x - circle.x);
+      if (!arcStaysInBounds(circle, circle.r, a1, angle, bounds)) continue;
+      let ok = true;
+      let epsR = 0; // max radial deviation of the run's vertices from the circle
+      for (let k = i + 1; k < j; k++) {
+        const radial = Math.abs(Math.hypot(points[k].x - circle.x, points[k].y - circle.y) - circle.r);
+        if (radial > tolerance) { ok = false; break; }
+        epsR = Math.max(epsR, radial);
+        // Points must progress monotonically along the arc, same direction.
+        if (Math.sign(arcAngle(circle, points[i], points[k])) !== Math.sign(angle)
+          || Math.sign(arcAngle(circle, points[k], points[j])) !== Math.sign(angle)) { ok = false; break; }
+      }
+      // Exact per-segment sagitta bound (Safonova & Rossignac 2003: a
+      // vertex-only check cannot bound the arc against the polyline).
+      // For each consecutive pair, the sagitta s_i = R(1-cos(delta_i/2))
+      // is the arc's max distance from that segment's chord, and the
+      // vertices sit up to epsR off the circle, so the arc stays within
+      // s_i + epsR of the polyline. Accept only if that is within
+      // tolerance (with the usual 10% headroom) for every sub-segment.
+      // This is O(n), exact, and needs no sampling; it automatically
+      // rejects the long-chord case that bulged 14.8mm off the polyline.
+      if (ok) {
+        for (let k = i; k < j; k++) {
+          const b1 = Math.atan2(points[k].y - circle.y, points[k].x - circle.x);
+          const b2 = Math.atan2(points[k + 1].y - circle.y, points[k + 1].x - circle.x);
+          let d = b2 - b1;
+          if (angle < 0 && d > 0) d -= 2 * Math.PI;
+          if (angle > 0 && d < 0) d += 2 * Math.PI;
+          const s = circle.r * (1 - Math.cos(Math.abs(d) / 2));
+          if (s + epsR > tolerance * 0.9) { ok = false; break; }
+        }
+      }
+      // The radial check alone is not enough: it only puts the vertices
+      // near the circle, but the arc between two vertices can bulge far
+      // off the straight segment joining them, which is what rounds off
+      // polygonal shapes like the bunny. So check the arc's intermediate
+      // positions directly: the midpoint of the arc between each
+      // consecutive pair must stay within the same tolerance of the
+      // polyline. Measure against the closest of the nearby segments,
+      // not just the segment the midpoint sits on — near a corner the
+      // arc can be closest to an adjacent segment, and measuring only
+      // its own segment lets the true deviation exceed the tolerance by
+      // ~0.01mm. That bounds the arc to the polyline itself, not just to
+      // its vertices.
+      if (ok) {
+        const distToSeg = (px, py, a, b) => {
+          const dx = b.x - a.x, dy = b.y - a.y;
+          const len2 = dx * dx + dy * dy;
+          let t = len2 ? ((px - a.x) * dx + (py - a.y) * dy) / len2 : 0;
+          t = Math.max(0, Math.min(1, t));
+          return Math.hypot(px - (a.x + t * dx), py - (a.y + t * dy));
+        };
+        // Sample the arc at several points along each sub-arc, not just
+        // its midpoint: the distance to the polyline can peak off-centre
+        // (near a vertex the closest segment changes), so a midpoint-only
+        // check lets the true deviation exceed the tolerance by ~0.01mm.
+        for (let k = i; k < j && ok; k++) {
+          const a = points[k], b = points[k + 1];
+          const a1 = Math.atan2(a.y - circle.y, a.x - circle.x);
+          const a2 = Math.atan2(b.y - circle.y, b.x - circle.x);
+          let d = a2 - a1;
+          if (angle < 0 && d > 0) d -= 2 * Math.PI;
+          if (angle > 0 && d < 0) d += 2 * Math.PI;
+          for (const f of [0.25, 0.5, 0.75]) {
+            const ang = a1 + d * f;
+            const px = circle.x + circle.r * Math.cos(ang);
+            const py = circle.y + circle.r * Math.sin(ang);
+            let dist = distToSeg(px, py, a, b);
+            if (k > i) dist = Math.min(dist, distToSeg(px, py, points[k - 1], a));
+            if (k + 2 <= j) dist = Math.min(dist, distToSeg(px, py, b, points[k + 2]));
+            // The samples are discrete, so the true peak between them can
+            // sit a hair above the sampled values; leave 10% headroom so
+            // the actual deviation stays within the stated tolerance.
+            if (dist > tolerance * 0.9) { ok = false; break; }
+          }
+        }
+      }
+      if (ok) { best = { end: j, center: circle, clockwise: angle < 0 }; break; }
+    }
+    if (best) {
+      moves.push({ type: "arc", to: points[best.end], center: best.center, clockwise: best.clockwise });
+      i = best.end;
+    } else {
+      moves.push({ type: "line", to: points[i + 1] });
+      i += 1;
+    }
+  }
+  return moves;
+}
+
 function cloneStroke(stroke) {
   const copy = stroke.map((point) => ({ x: point.x, y: point.y }));
   if (stroke.shape) copy.shape = true;
@@ -439,11 +608,33 @@ function generateGcode() {
     penDown(lines);
 
     // A tap still receives a short down/up sequence without a potentially zero move.
-    for (let pointIndex = 1; pointIndex < stroke.length; pointIndex += 1) {
-      const point = plotPoint(stroke[pointIndex]);
-      lines.push(`G1 X${formatMm(point.x)} Y${formatMm(point.y)}${feedSuffix(draw)}`);
+    // Curved runs go out as G2/G3 arcs (I/J = center offset from the
+    // current position) so the firmware holds speed through them instead
+    // of braking at every short line segment; straight runs stay G1.
+    // Arcs are emitted at 4 decimal places: RRF 3.6.2+ aborts the job
+    // ("final radius not equal to initial radius") when the start and end
+    // radii differ by more than 0.05mm in FDM mode (0.0022mm in CNC), and
+    // 2-decimal rounding of I/J can push a fit arc over that line.
+    // Round the draw points to the emission precision (4 decimals) before
+    // fitting arcs, and emit every draw move at that precision. An arc's
+    // centre must be equidistant from the start and end points as the
+    // firmware sees them; fitting on unrounded points while a preceding
+    // G1 lands on a 2-decimal position lets the radii drift apart and
+    // trips RRF's radius check. At 4 decimals the drift is ~0.0001mm,
+    // far under RRF's 0.05mm FDM / 0.0022mm CNC limit.
+    const mmPoints = stroke.map(plotPoint).map((p) => ({ x: Number(formatMm(p.x, 4)), y: Number(formatMm(p.y, 4)) }));
+    const bounds = { minX: 0, minY: 0, maxX: width, maxY: height };
+    let cur = mmPoints[0];
+    for (const move of fitArcs(mmPoints, 0.1, bounds)) {
+      if (move.type === "arc") {
+        const g = move.clockwise ? "G2" : "G3";
+        lines.push(`${g} X${formatMm(move.to.x, 4)} Y${formatMm(move.to.y, 4)} I${formatMm(move.center.x - cur.x, 4)} J${formatMm(move.center.y - cur.y, 4)}${feedSuffix(draw)}`);
+      } else {
+        lines.push(`G1 X${formatMm(move.to.x, 4)} Y${formatMm(move.to.y, 4)}${feedSuffix(draw)}`);
+      }
+      cur = move.to;
     }
-    penPosition = plotPoint(stroke[stroke.length - 1]);
+    penPosition = mmPoints[mmPoints.length - 1];
     penUp(lines);
   });
 
