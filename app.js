@@ -169,29 +169,45 @@ function simplifyStroke(points, tolerance = 0.0012) {
   return [start, end];
 }
 
-// Chaikin corner cutting rounds the polyline so plotted strokes match the
-// smooth curve shown on screen.
-function chaikin(points, iterations = 2) {
-  let pts = points;
-  for (let iteration = 0; iteration < iterations; iteration += 1) {
-    if (pts.length < 3) return pts;
-    const out = [pts[0]];
-    for (let i = 0; i < pts.length - 1; i += 1) {
-      const a = pts[i];
-      const b = pts[i + 1];
-      out.push({ x: a.x * 0.75 + b.x * 0.25, y: a.y * 0.75 + b.y * 0.25 });
-      out.push({ x: a.x * 0.25 + b.x * 0.75, y: a.y * 0.25 + b.y * 0.75 });
+function flattenFreehand(points) {
+  // Sample the same quadratic-midpoint curve the renderer draws, so the
+  // plotted path matches the smooth line on screen instead of the raw
+  // pointer polygon. The raw polygon is what made hand-drawn lines
+  // choppy: every jitter point is a junction the plotter has to slow
+  // down for. The sampled curve has only gentle direction changes.
+  if (points.length < 3) return points.slice();
+  const pts = [points[0]];
+  const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+  let cur = points[0];
+  for (let i = 1; i < points.length - 1; i++) {
+    const ctrl = points[i];
+    const end = mid(points[i], points[i + 1]);
+    const len = distance(end, cur);
+    // Sample so consecutive samples are ~0.4mm apart on the default bed.
+    const n = Math.max(2, Math.ceil(len / 0.0035));
+    for (let k = 1; k <= n; k++) {
+      const t = k / n, u = 1 - t;
+      pts.push({
+        x: u * u * cur.x + 2 * u * t * ctrl.x + t * t * end.x,
+        y: u * u * cur.y + 2 * u * t * ctrl.y + t * t * end.y,
+      });
     }
-    out.push(pts[pts.length - 1]);
-    pts = out;
+    cur = end;
   }
+  pts.push(points[points.length - 1]);
   return pts;
 }
 
 function smoothStroke(points) {
-  // Simplify first so smoothing rounds real corners, not pointer jitter;
-  // the final pass drops the near-collinear points Chaikin introduces.
-  return simplifyStroke(chaikin(simplifyStroke(points)), 0.0004);
+  // Simplify first so the curve follows real corners, not pointer jitter;
+  // then sample the same quadratic-midpoint curve the renderer draws, so
+  // the plotted path matches the smooth line on screen instead of the raw
+  // pointer polygon (which is what made hand-drawn lines choppy: every
+  // jitter point is a junction the plotter has to slow down for). The
+  // final pass drops the near-collinear samples. This replaces the old
+  // Chaikin corner-cutting, which rounded corners but still left the path
+  // as a polygon of the raw points (and shrank real corners).
+  return simplifyStroke(flattenFreehand(simplifyStroke(points)), 0.0004);
 }
 
 function cloneStroke(stroke) {
@@ -390,6 +406,16 @@ function generateGcode() {
 
   let penPosition = null;
   let selectedTool = null;
+  // The feedrate is modal: emit it only when it changes (travel <-> draw),
+  // not on every line. Repeating F on every short segment bloats the job
+  // and starves the planner, which is what makes curves sound choppy.
+  let lastFeed = null;
+  const feedSuffix = (feed) => {
+    const value = Math.round(feed);
+    if (value === lastFeed) return "";
+    lastFeed = value;
+    return ` F${value}`;
+  };
   groupedStrokes.forEach((originalStroke, index) => {
     const tool = toolForStroke(originalStroke);
     if (tool !== selectedTool) {
@@ -409,13 +435,13 @@ function generateGcode() {
     }
     const first = plotPoint(stroke[0]);
     lines.push(`; stroke ${index + 1}`);
-    lines.push(`G0 X${formatMm(first.x)} Y${formatMm(first.y)} F${Math.round(travel)}`);
+    lines.push(`G0 X${formatMm(first.x)} Y${formatMm(first.y)}${feedSuffix(travel)}`);
     penDown(lines);
 
     // A tap still receives a short down/up sequence without a potentially zero move.
     for (let pointIndex = 1; pointIndex < stroke.length; pointIndex += 1) {
       const point = plotPoint(stroke[pointIndex]);
-      lines.push(`G1 X${formatMm(point.x)} Y${formatMm(point.y)} F${Math.round(draw)}`);
+      lines.push(`G1 X${formatMm(point.x)} Y${formatMm(point.y)}${feedSuffix(draw)}`);
     }
     penPosition = plotPoint(stroke[stroke.length - 1]);
     penUp(lines);
