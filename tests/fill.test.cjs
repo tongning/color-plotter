@@ -178,3 +178,41 @@ test('SVG solid regions still hatch when a separate thin outline shares the mask
   assert.ok(strokes.some(p=>p.length<5));
   assert.ok(strokes.some(p=>p.length>20));
 });
+
+test('boundaryRings drops unclosed traces instead of returning a bogus ring', () => {
+  // Regression: filling a shape with a curved hole (ellipse with an inner
+  // ellipse hole) hung the page. The Moore trace on the curved hole
+  // boundary never returned to its start and wandered until the guard,
+  // producing a 460k-point "ring" that made the hatch do billions of
+  // operations. An unclosed trace must be discarded, not returned.
+  const { boundaryRings } = require('../fill-path.js');
+  const mask = maskFor((x, y) => {
+    const rO = Math.hypot((x - 48) / 40, (y - 48) / 32);
+    const rI = Math.hypot((x - 48) / 12, (y - 48) / 10);
+    return rO < 1 && rI > 1;
+  });
+  const labels = new Int32Array(size * size);
+  for (let i = 0; i < size * size; i++) if (mask[i]) labels[i] = 1;
+  const rings = boundaryRings(mask, size, labels);
+  for (const list of rings.values()) for (const ring of list) {
+    // A real boundary loop is at most the region perimeter; a trace that
+    // hit the guard would be ~2*size*size points.
+    assert.ok(ring.length < size * size / 4, `unclosed ring of ${ring.length} points returned`);
+    // The ring closes: its last point is adjacent to its first.
+    const first = ring[0], last = ring[ring.length - 1];
+    const dx = Math.abs(first % size - last % size), dy = Math.abs(Math.floor(first / size) - Math.floor(last / size));
+    assert.ok(dx <= 1 && dy <= 1, 'ring does not close back to its start');
+  }
+});
+
+test('raster hatch fills an elliptical annulus (hole) without hanging', () => {
+  const mask = maskFor((x, y) => {
+    const rO = Math.hypot((x - 48) / 40, (y - 48) / 32);
+    const rI = Math.hypot((x - 48) / 12, (y - 48) / 10);
+    return rO < 1 && rI > 1;
+  });
+  const strokes = hatchStrokes(mask, size, 2);
+  assert.ok(strokes.length >= 1, 'annulus should hatch');
+  checkInside(strokes, mask);
+  checkCoverage(strokes, mask);
+});

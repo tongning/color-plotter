@@ -19,7 +19,7 @@
       let cur = [sx, sy], backDir = 6;
       const loop = [cur[0] + cur[1] * size];
       visited[cur[1] * size + cur[0]] = 1;
-      let guard = 0;
+      let guard = 0, closed = false;
       while (guard++ < total * 2) {
         let found = -1;
         for (let k = 0; k < 8; k++) {
@@ -40,11 +40,16 @@
         if (found < 0) break;
         backDir = (found + 4) % 8;
         cur = [cur[0] + dirs[found][0], cur[1] + dirs[found][1]];
-        if (cur[0] === sx && cur[1] === sy) break;
+        if (cur[0] === sx && cur[1] === sy) { closed = true; break; }
         loop.push(cur[0] + cur[1] * size);
         if (isBoundary(cur[0], cur[1], label)) visited[cur[1] * size + cur[0]] = 1;
       }
-      if (loop.length < 3) continue;
+      // A trace that never returns to its start (it wandered until the
+      // guard, e.g. on a curved hole boundary) is not a ring: discarding
+      // it keeps a bogus 460k-point "ring" from poisoning the hatch
+      // connectors and the vector fill, which would hang the page. The
+      // fill falls back to the raster hatch / pen lifts for that region.
+      if (!closed || loop.length < 3) continue;
       if (!rings.has(label)) rings.set(label, []);
       rings.get(label).push(loop);
     }
