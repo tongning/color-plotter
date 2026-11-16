@@ -1041,7 +1041,37 @@ function addPoint(event) {
   if (!last || distance(last, point) > 0.0014) state.activeStroke.push(point);
 }
 
-function shapeStroke(tool, start, end) {
+// Shift-hold constraint for the shape tools, computed in mm so a square
+// is square on the bed (and on screen) even when the bed isn't square.
+// rectangle/ellipse drag to a square/circle; lines snap to the nearest of
+// 8 directions (0/45/90/... deg), preserving the drag length. `start` and
+// `end` are normalized canvas points; width/height are the bed size in mm.
+function shiftConstrain(tool, start, end, width, height) {
+  const sx = start.x * width, sy = start.y * height;
+  const ex = end.x * width, ey = end.y * height;
+  const dx = ex - sx, dy = ey - sy;
+  let cx, cy;
+  if (tool === "line") {
+    const len = Math.hypot(dx, dy);
+    if (len === 0) return end;
+    const snapped = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4);
+    cx = sx + len * Math.cos(snapped);
+    cy = sy + len * Math.sin(snapped);
+  } else {
+    // rectangle / ellipse: square bounding box, side = the longer drag
+    // axis, extending in the drag direction.
+    const side = Math.max(Math.abs(dx), Math.abs(dy));
+    cx = sx + (dx >= 0 ? side : -side);
+    cy = sy + (dy >= 0 ? side : -side);
+  }
+  return { x: cx / width, y: cy / height };
+}
+
+function shapeStroke(tool, start, end, shift = false) {
+  if (shift && (tool === "line" || tool === "rectangle" || tool === "ellipse")) {
+    const { width, height } = dimensions();
+    end = shiftConstrain(tool, start, end, width, height);
+  }
   let points;
   if (tool === "line") {
     points = [start, end];
@@ -1269,7 +1299,7 @@ canvas.addEventListener("pointerdown", (event) => {
     return;
   }
   state.shapeStart = point;
-  state.activeStroke = state.drawingTool === "pencil" ? [point] : shapeStroke(state.drawingTool, point, point);
+  state.activeStroke = state.drawingTool === "pencil" ? [point] : shapeStroke(state.drawingTool, point, point, event.shiftKey);
   state.activeStroke.color = markerPalette[activeMarker];
   updateUi();
   render();
@@ -1289,7 +1319,7 @@ canvas.addEventListener("pointermove", (event) => {
     for (const pointEvent of coalesced.length ? coalesced : [event]) addPoint(pointEvent);
   } else {
     const color = state.activeStroke.color;
-    state.activeStroke = shapeStroke(state.drawingTool, state.shapeStart, normalizedEventPoint(event));
+    state.activeStroke = shapeStroke(state.drawingTool, state.shapeStart, normalizedEventPoint(event), event.shiftKey);
     state.activeStroke.color = color;
   }
   render();
