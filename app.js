@@ -424,7 +424,7 @@ function showView(name) {
   for (const [viewName, element] of Object.entries(views)) element.classList.toggle("hidden", viewName !== name);
   if (name === "selfie") startCamera();
   else stopCamera();
-  if (name === "draw") resizeCanvas();
+  if (name === "draw") fitBedToSpace();
   if (name === "premade") {
     loadPremades();
     loadGallery();
@@ -447,7 +447,7 @@ function normalizedEventPoint(event) {
 function updateBedAspect() {
   const { width, height } = dimensions();
   plottingBed.style.aspectRatio = `${width} / ${height}`;
-  resizeCanvas();
+  fitBedToSpace();
 }
 
 function resizeCanvas() {
@@ -462,6 +462,39 @@ function resizeCanvas() {
   state.canvasWidth = rect.width;
   state.canvasHeight = rect.height;
   render();
+}
+
+// Size the bed to fill the screen's available space while keeping the bed's
+// aspect ratio, so the canvas uses the screen instead of a fixed 540px box.
+// The canvas backing store follows automatically in resizeCanvas (backing
+// pixels = CSS pixels × devicePixelRatio), so a bigger bed stays crisp.
+function fitBedToSpace() {
+  const area = document.querySelector(".draw-area");
+  if (!area || !plottingBed) return;
+  const areaRect = area.getBoundingClientRect();
+  if (!areaRect.width) return; // draw view is hidden
+  const markerRail = area.querySelector(".marker-panel");
+  const toolsRail = area.querySelector("#drawingTools");
+  const railsWidth = (markerRail ? markerRail.getBoundingClientRect().width : 0)
+    + (toolsRail ? toolsRail.getBoundingClientRect().width : 0)
+    + 24; // the two 12px gaps in the draw-area row
+  const availW = Math.max(0, areaRect.width - railsWidth);
+  // Available height: from the draw-area top to the bottom of the viewport,
+  // so the whole bed stays on screen. Use the document position of the top
+  // so the size is stable while scrolling.
+  const areaTopDoc = areaRect.top + window.scrollY;
+  const availH = Math.max(0, window.innerHeight - areaTopDoc - 24);
+  const { width: bedW, height: bedH } = dimensions();
+  const scale = Math.min(availW / bedW, availH / bedH);
+  const w = Math.max(1, Math.floor(bedW * scale));
+  const h = Math.max(1, Math.floor(bedH * scale));
+  // Only touch the DOM when the size actually changed, so the ResizeObserver
+  // on the draw view (which fires when the bed resizes the view) converges.
+  if (plottingBed.style.width !== `${w}px` || plottingBed.style.height !== `${h}px`) {
+    plottingBed.style.width = `${w}px`;
+    plottingBed.style.height = `${h}px`;
+    resizeCanvas();
+  }
 }
 
 // The bed is not necessarily square, so x and y scale separately.
@@ -2754,10 +2787,8 @@ for (const selector of ["#goSvg", "#importSvgButton"]) {
 $("#svgFile").addEventListener("change", async (event) => {
   const file = event.target.files[0];
   if (!file) return;
-  const status = $("#svgImportStatus");
   $("#importSvgButton").disabled = true;
   $("#goSvg").disabled = true;
-  status.textContent = "Converting SVG…";
   try {
     if (file.size > 2 * 1024 * 1024) throw new Error("Choose an SVG smaller than 2 MB.");
     const strokes = await PlotterColor.importSvg(await file.text(), svgFillStrokes);
@@ -2772,10 +2803,8 @@ $("#svgFile").addEventListener("change", async (event) => {
     showView("draw");
     render(); updateUi();
     const tools = new Set(strokes.map(toolForStroke));
-    status.textContent = `${file.name} · ${strokes.length} paths · ${tools.size} markers. Preview shows the matched marker colors.`;
-    showToast(`Imported ${file.name}`);
+    showToast(`Imported ${file.name} — ${strokes.length} paths, ${tools.size} markers`);
   } catch (error) {
-    status.textContent = error.message;
     showToast(error.message || "Could not import this SVG.", "error");
   } finally {
     event.target.value = "";
@@ -2784,7 +2813,13 @@ $("#svgFile").addEventListener("change", async (event) => {
   }
 });
 
-window.addEventListener("resize", resizeCanvas);
+window.addEventListener("resize", fitBedToSpace);
+// Refit when the draw view's layout changes (panels showing/hiding above the
+// canvas move the draw area, changing the available height).
+if (typeof ResizeObserver !== "undefined") {
+  const drawViewObserver = new ResizeObserver(() => fitBedToSpace());
+  drawViewObserver.observe($("#viewDraw"));
+}
 showView("splash");
 updateBedAspect();
 updateUi();

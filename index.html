@@ -153,8 +153,6 @@
             <div class="marker-palette" id="markerPalette" role="group" aria-label="Eight plotter markers"></div>
           </section>
           <div class="plotting-bed" id="plottingBed">
-            <div class="corner-mark top-left"></div><div class="corner-mark top-right"></div>
-            <div class="corner-mark bottom-left"></div><div class="corner-mark bottom-right"></div>
             <canvas id="drawCanvas" aria-label="Drawing canvas. Drag or draw with your pen, mouse, or touch."></canvas>
           </div>
           <div class="drawing-tools" id="drawingTools" role="toolbar" aria-label="Drawing tools">
@@ -167,8 +165,6 @@
             <button data-drawing-tool="text" type="button" aria-pressed="false" title="Text (T)">T Text <span class="key-hint">T</span></button>
           </div>
         </div>
-        <p class="marker-help">Select a marker for new strokes. Plots draw one marker color at a time to minimize swaps. Press <span class="key-hint">1</span>–<span class="key-hint">8</span> to pick a marker.</p>
-        <p class="marker-help" id="svgImportStatus" role="status">SVG colors are matched to the closest marker. Solid fills become hatch lines.</p>
         <div class="text-options hidden" id="textOptions">
           <input id="textInput" type="text" placeholder="Type text, then click the canvas to place it" aria-label="Text to place" autocomplete="off">
           <label>Font
