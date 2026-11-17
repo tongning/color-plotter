@@ -519,7 +519,6 @@ function render() {
 }
 
 function updateUi() {
-  updateColorMapping();
   const hasStrokes = state.strokes.length > 0;
   const squiggleMode = Boolean(state.sourceImage);
   // Saved gallery drawings are opened as editable working copies. Their
@@ -2710,28 +2709,6 @@ for (const id of PERSISTED_SETTING_IDS) {
 
 function updateMarkerSelection() {
   for (const button of $$(".marker-select")) button.setAttribute("aria-pressed", String(Number(button.dataset.marker) === activeMarker));
-  $("#activeMarkerLabel").textContent = `Drawing with T${activeMarker}`;
-}
-
-function updateColorMapping() {
-  const mapping = $("#colorMapping");
-  const colors = [...new Set(state.strokes.map((stroke) => stroke.color || markerPalette[0]))];
-  mapping.replaceChildren();
-  for (const color of colors.slice(0, 32)) {
-    const tool = PlotterColor.nearestTool(color, markerPalette);
-    const item = document.createElement("span");
-    item.className = "color-assignment";
-    item.title = `${color} → T${tool} (${markerPalette[tool]})`;
-    for (const swatch of [color, markerPalette[tool]]) {
-      const chip = document.createElement("span");
-      chip.className = "color-chip";
-      chip.style.backgroundColor = swatch;
-      item.append(chip);
-      if (swatch === color && item.childNodes.length === 1) item.append(document.createTextNode(` → T${tool} `));
-    }
-    mapping.append(item);
-  }
-  if (colors.length > 32) mapping.append(document.createTextNode(`+${colors.length - 32} more source colors`));
 }
 
 for (let tool = 0; tool < 8; tool++) {
@@ -2743,7 +2720,6 @@ for (let tool = 0; tool < 8; tool++) {
   button.type = "button";
   button.className = "marker-select";
   button.dataset.marker = tool;
-  button.textContent = `T${tool}`;
   const chip = document.createElement("span");
   chip.className = "color-chip";
   chip.style.backgroundColor = markerPalette[tool];

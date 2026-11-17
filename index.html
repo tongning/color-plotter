@@ -8,17 +8,10 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <header class="topbar">
-      <a class="brand" href="./" aria-label="Small Plotter home">
-        <span class="brand-emoji" aria-hidden="true">🖊️</span>
-        <span>Small Plotter</span>
-      </a>
-
-      <div class="topbar-actions">
-        <button class="ghost" id="logsButton" type="button" title="Application logs" aria-expanded="false" aria-controls="logsPanel">📜</button>
-        <button class="ghost" id="adminButton" type="button" title="Machine control" aria-expanded="false" aria-controls="adminPanel">⚙️</button>
-      </div>
-    </header>
+    <div class="topbar-actions">
+      <button class="ghost" id="logsButton" type="button" title="Application logs" aria-expanded="false" aria-controls="logsPanel">📜</button>
+      <button class="ghost" id="adminButton" type="button" title="Machine control" aria-expanded="false" aria-controls="adminPanel">⚙️</button>
+    </div>
 
     <div class="admin-panel hidden" id="adminPanel" aria-hidden="true">
       <h3>Admin</h3>
@@ -157,7 +150,6 @@
 
         <div class="draw-area">
           <section class="marker-panel" aria-label="Drawing markers">
-            <div class="marker-heading"><strong>Draw with a marker</strong><span id="activeMarkerLabel">Drawing with T0</span></div>
             <div class="marker-palette" id="markerPalette" role="group" aria-label="Eight plotter markers"></div>
           </section>
           <div class="plotting-bed" id="plottingBed">
@@ -165,20 +157,18 @@
             <div class="corner-mark bottom-left"></div><div class="corner-mark bottom-right"></div>
             <canvas id="drawCanvas" aria-label="Drawing canvas. Drag or draw with your pen, mouse, or touch."></canvas>
           </div>
+          <div class="drawing-tools" id="drawingTools" role="toolbar" aria-label="Drawing tools">
+            <button class="active" data-drawing-tool="pencil" type="button" aria-pressed="true" title="Pencil (P)">✏️ Pencil <span class="key-hint">P</span></button>
+            <button data-drawing-tool="line" type="button" aria-pressed="false" title="Line (L)">╱ Line <span class="key-hint">L</span></button>
+            <button data-drawing-tool="rectangle" type="button" aria-pressed="false" title="Rectangle (R)">▭ Rectangle <span class="key-hint">R</span></button>
+            <button data-drawing-tool="ellipse" type="button" aria-pressed="false" title="Ellipse (E)">◯ Ellipse <span class="key-hint">E</span></button>
+            <button data-drawing-tool="fill" type="button" aria-pressed="false" title="Fill (F)">▨ Fill <span class="key-hint">F</span></button>
+            <button data-drawing-tool="eraser" type="button" aria-pressed="false" title="Eraser (X)">⌫ Eraser <span class="key-hint">X</span></button>
+            <button data-drawing-tool="text" type="button" aria-pressed="false" title="Text (T)">T Text <span class="key-hint">T</span></button>
+          </div>
         </div>
-        <p class="marker-help">Select a marker for new strokes. Plots draw one marker color at a time to minimize swaps. Press <span class="key-hint">1</span>–<span class="key-hint">8</span> to pick T0–T7.</p>
+        <p class="marker-help">Select a marker for new strokes. Plots draw one marker color at a time to minimize swaps. Press <span class="key-hint">1</span>–<span class="key-hint">8</span> to pick a marker.</p>
         <p class="marker-help" id="svgImportStatus" role="status">SVG colors are matched to the closest marker. Solid fills become hatch lines.</p>
-        <div class="color-mapping" id="colorMapping" aria-label="Drawing color assignments"></div>
-
-        <div class="drawing-tools" id="drawingTools" role="toolbar" aria-label="Drawing tools">
-          <button class="active" data-drawing-tool="pencil" type="button" aria-pressed="true" title="Pencil (P)">✏️ Pencil <span class="key-hint">P</span></button>
-          <button data-drawing-tool="line" type="button" aria-pressed="false" title="Line (L)">╱ Line <span class="key-hint">L</span></button>
-          <button data-drawing-tool="rectangle" type="button" aria-pressed="false" title="Rectangle (R)">▭ Rectangle <span class="key-hint">R</span></button>
-          <button data-drawing-tool="ellipse" type="button" aria-pressed="false" title="Ellipse (E)">◯ Ellipse <span class="key-hint">E</span></button>
-          <button data-drawing-tool="fill" type="button" aria-pressed="false" title="Fill (F)">▨ Fill <span class="key-hint">F</span></button>
-          <button data-drawing-tool="eraser" type="button" aria-pressed="false" title="Eraser (X)">⌫ Eraser <span class="key-hint">X</span></button>
-          <button data-drawing-tool="text" type="button" aria-pressed="false" title="Text (T)">T Text <span class="key-hint">T</span></button>
-        </div>
         <div class="text-options hidden" id="textOptions">
           <input id="textInput" type="text" placeholder="Type text, then click the canvas to place it" aria-label="Text to place" autocomplete="off">
           <label>Font
