@@ -2791,7 +2791,8 @@ $("#svgFile").addEventListener("change", async (event) => {
   $("#goSvg").disabled = true;
   try {
     if (file.size > 2 * 1024 * 1024) throw new Error("Choose an SVG smaller than 2 MB.");
-    const strokes = await PlotterColor.importSvg(await file.text(), svgFillStrokes);
+    const { width: bedWidth, height: bedHeight } = dimensions();
+    const strokes = PlotterColor.fitToBed(await PlotterColor.importSvg(await file.text(), svgFillStrokes), bedWidth, bedHeight);
     // Replace the current artwork only after the complete import succeeds.
     snapshot();
     setSquiggleSource(null);

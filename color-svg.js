@@ -233,7 +233,46 @@
     } finally { frame.remove(); }
   }
 
-  const api = { DEFAULT_PALETTE, isColor, nearestTool, splitPath, clipPolyline, importSvg };
+  // Imported SVGs arrive normalized to a square (0..1 in both axes), but the
+  // bed is not necessarily square. Mapping x -> bed width and y -> bed height
+  // then stretches the artwork whenever the bed is rectangular: a square
+  // design on the 118x140 bed plotted 118 wide x 140 tall. Fit the
+  // artwork's bounding box into the bed preserving its aspect ratio,
+  // centred, so a square design stays square and a wide or tall one fills
+  // the bed's limiting dimension. On a square bed this is a no-op for
+  // artwork that already fills its viewBox.
+  function fitToBed(strokes, bedWidth, bedHeight) {
+    if (!(bedWidth > 0 && bedHeight > 0)) return strokes;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const stroke of strokes) {
+      for (const point of stroke) {
+        if (point.x < minX) minX = point.x;
+        if (point.x > maxX) maxX = point.x;
+        if (point.y < minY) minY = point.y;
+        if (point.y > maxY) maxY = point.y;
+      }
+    }
+    if (!Number.isFinite(minX) || !Number.isFinite(maxX)) return strokes;
+    const dw = maxX - minX, dh = maxY - minY;
+    if (dw <= 0 || dh <= 0) return strokes;
+    // The artwork's true aspect is dw/dh (the normalized space is uniform).
+    const aspect = dw / dh;
+    let plottedW, plottedH;
+    if (aspect >= bedWidth / bedHeight) { plottedW = bedWidth; plottedH = bedWidth / aspect; }
+    else { plottedH = bedHeight; plottedW = bedHeight * aspect; }
+    const sx = plottedW / (dw * bedWidth);
+    const sy = plottedH / (dh * bedHeight);
+    const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+    for (const stroke of strokes) {
+      for (const point of stroke) {
+        point.x = (point.x - cx) * sx + 0.5;
+        point.y = (point.y - cy) * sy + 0.5;
+      }
+    }
+    return strokes;
+  }
+
+  const api = { DEFAULT_PALETTE, isColor, nearestTool, splitPath, clipPolyline, importSvg, fitToBed };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else window.PlotterColor = api;
 })();
