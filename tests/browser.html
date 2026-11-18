@@ -47,6 +47,15 @@ document.querySelector('#app').onload = async ({ target }) => {
     check(Math.abs(paths[0][0].y-.25)<.001 && Math.abs(paths[0].at(-1).y-.75)<.001, 'SVG without viewBox fits and centers with its aspect ratio');
     paths = await convert(svg('<path fill="none" stroke="blue" d="M-50 50L150 50"/>'));
     check(paths[0][0].x === 0 && paths[0].at(-1).x === 1, 'Out-of-bed paths are clipped');
+    paths = await convert(svg('<line x1="10" y1="50" x2="90" y2="50" stroke="black" stroke-width="2"/><rect x="40" y="30" width="20" height="40" fill="white"/>'));
+    check(paths.length === 2 && paths.every(p => p.color === '#000000'), 'Stroke behind a white fill is split and the white fill adds no ink');
+    check(paths.every(p => p.color !== '#08b1dc'), 'White fill is paper: it never hatches sky blue');
+    check(paths.every(p => p.every(pt => !(pt.x > 0.4 && pt.x < 0.6 && Math.abs(pt.y - 0.5) < 0.02))), 'Stroke behind an opaque white fill is hidden');
+    paths = await convert(svg('<line x1="10" y1="50" x2="90" y2="50" stroke="black" stroke-width="2"/><rect x="40" y="30" width="20" height="40" fill="red"/>'));
+    check(paths.some(p => p.color === '#ff0000'), 'Opaque colored fill still hatches');
+    check(paths.filter(p => p.color === '#000000').every(p => p.every(pt => !(pt.x > 0.4 && pt.x < 0.6 && Math.abs(pt.y - 0.5) < 0.02))), 'Stroke behind an opaque colored fill is hidden');
+    paths = await convert(svg('<line x1="10" y1="10" x2="90" y2="10" stroke="black" stroke-width="2"/>'));
+    check(paths.length === 1, 'A stroke with no fill above it is unchanged');
     for (const [body, label] of [
       ['<text x="0" y="20">Hi</text>', 'Unsupported text reports an error'],
       ['<defs><linearGradient id="g"><stop stop-color="red"/></linearGradient></defs><rect width="100" height="100" fill="url(#g)"/>', 'Unsupported gradients report an error'],

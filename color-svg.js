@@ -101,6 +101,42 @@
     return pieces;
   }
 
+  // Hidden-line removal: clip a polyline against an occluder mask
+  // (Uint8Array SIZE*SIZE, 1 = hidden behind an opaque fill drawn later).
+  // Points are normalized 0..1. Subdivides long segments to ~1px so a
+  // hidden middle isn't missed, classifies each sub-segment by its
+  // midpoint, and returns the visible runs (each >= 2 points).
+  function clipAgainstMask(points, mask) {
+    if (points.length < 2) return [];
+    const pieces = [];
+    let piece = [];
+    const step = 1 / SIZE;
+    function inside(x, y) {
+      const px = Math.min(SIZE - 1, Math.max(0, Math.floor(x * SIZE)));
+      const py = Math.min(SIZE - 1, Math.max(0, Math.floor(y * SIZE)));
+      return mask[py * SIZE + px] === 1;
+    }
+    for (let i = 1; i < points.length; i++) {
+      const a = points[i - 1], b = points[i];
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const n = Math.max(1, Math.ceil(Math.hypot(dx, dy) / step));
+      for (let j = 0; j < n; j++) {
+        const t0 = j / n, t1 = (j + 1) / n;
+        const x0 = a.x + dx * t0, y0 = a.y + dy * t0;
+        const x1 = a.x + dx * t1, y1 = a.y + dy * t1;
+        if (inside((x0 + x1) / 2, (y0 + y1) / 2)) {
+          if (piece.length > 1) pieces.push(piece);
+          piece = [];
+        } else {
+          if (!piece.length) piece.push({ x: x0, y: y0 });
+          piece.push({ x: x1, y: y1 });
+        }
+      }
+    }
+    if (piece.length > 1) pieces.push(piece);
+    return pieces;
+  }
+
   async function importSvg(text, fillStrokes) {
     const parsed = new DOMParser().parseFromString(text, "image/svg+xml");
     const source = parsed.documentElement;
@@ -148,14 +184,8 @@
       svg.style.setProperty("width", `${SIZE}px`, "important");
       svg.style.setProperty("height", `${SIZE}px`, "important");
       doc.body.append(svg);
-      const strokes = [];
       const raster = document.createElement("canvas"); raster.width = raster.height = SIZE;
       const context = raster.getContext("2d", { willReadFrequently: true });
-      function add(points, color) {
-        if (points.length < 2) return;
-        points.color = color; points.shape = true;
-        strokes.push(points);
-      }
       function colorOf(value, opacity) {
         if (value === "none" || opacity <= 0) return null;
         if (/url\(/i.test(value)) throw new Error("Gradients and patterns are unsupported. Use solid SVG colors.");
@@ -166,6 +196,9 @@
         const rgb = context.getImageData(0, 0, 1, 1).data;
         return `#${[...rgb].slice(0, 3).map((v) => v.toString(16).padStart(2, "0")).join("")}`;
       }
+      // Phase 1: collect every element's outlines, fill and stroke in
+      // document order. Nothing is plotted yet.
+      const items = [];
       for (const element of svg.querySelectorAll("path,rect,circle,ellipse,line,polyline,polygon")) {
         if (element.closest("defs")) continue;
         const style = frame.contentWindow.getComputedStyle(element);
@@ -178,7 +211,8 @@
         }
         if (hidden || opacity === 0 || style.visibility !== "visible") continue;
         if (style.strokeDasharray !== "none" || [style.markerStart, style.markerMid, style.markerEnd].some((v) => v && v !== "none")) throw new Error("Convert dashed strokes and arrow markers to paths before importing.");
-        const fill = element.localName === "line" ? null : colorOf(style.fill, opacity * Number(style.fillOpacity));
+        const fillOpacity = opacity * Number(style.fillOpacity);
+        const fill = element.localName === "line" ? null : colorOf(style.fill, fillOpacity);
         const stroke = parseFloat(style.strokeWidth) > 0 ? colorOf(style.stroke, opacity * Number(style.strokeOpacity)) : null;
         if (!fill && !stroke) continue;
         const matrix = element.getCTM();
@@ -202,9 +236,34 @@
             outlines.push(points);
           }
         } finally { if (original !== null) element.setAttribute("d", original); }
-        if (fill) {
+        items.push({ outlines, fill, stroke, fillRule: style.fillRule, fillOpacity });
+      }
+      // Phase 2: hidden-line removal. Walk the elements in reverse
+      // (painter's algorithm): keep a running union of the opaque fill
+      // masks from later-painted elements, and clip each earlier stroke
+      // (and each earlier fill's hatch) against it, so lines behind a
+      // solid fill are never plotted. A fill's own outline is clipped
+      // only by later fills, never by its own fill, because the mask is
+      // added to the occluder after the element's own strokes are done.
+      // White is paper, not ink: an opaque white fill occludes but is
+      // never hatched (it used to hatch sky blue via nearestTool).
+      // Only opaque fills (fill-opacity >= 0.9) occlude; semi-transparent
+      // fills don't hide what's behind them.
+      const occluder = new Uint8Array(SIZE * SIZE);
+      let hasOccluder = false;
+      const ordered = new Array(items.length);
+      for (let idx = items.length - 1; idx >= 0; idx--) {
+        const item = items[idx];
+        const out = [];
+        function addToOut(points, color) {
+          if (points.length < 2) return;
+          points.color = color; points.shape = true;
+          out.push(points);
+        }
+        let mask = null, area = 0;
+        if (item.fill) {
           context.clearRect(0, 0, SIZE, SIZE); context.beginPath();
-          for (const points of outlines) {
+          for (const points of item.outlines) {
             context.moveTo(points[0].x * SIZE, points[0].y * SIZE);
             for (let i = 1; i < points.length; i++) {
               const b = points[i];
@@ -212,10 +271,9 @@
             }
             context.closePath();
           }
-          context.fillStyle = "#000"; context.fill(style.fillRule === "evenodd" ? "evenodd" : "nonzero");
+          context.fillStyle = "#000"; context.fill(item.fillRule === "evenodd" ? "evenodd" : "nonzero");
           const data = context.getImageData(0, 0, SIZE, SIZE).data;
-          const mask = new Uint8Array(SIZE * SIZE);
-          let area = 0;
+          mask = new Uint8Array(SIZE * SIZE);
           for (let i = 0; i < mask.length; i++) {
             const inside = data[i * 4 + 3] > 127;
             mask[i] = inside ? 1 : 0;
@@ -224,10 +282,30 @@
           // Plot solid areas as connected fills and narrow traced ink as
           // centerlines. The outlines are the vector fill boundaries, so
           // pass them through for a vector hatch of the solid parts.
-          if (area > 0) for (const path of fillStrokes(mask, outlines)) add(path, fill);
+          // White is paper: never hatched.
+          if (area > 0 && item.fill !== "#ffffff") {
+            for (const path of fillStrokes(mask, item.outlines)) {
+              if (hasOccluder) for (const vis of clipAgainstMask(path, occluder)) addToOut(vis, item.fill);
+              else addToOut(path, item.fill);
+            }
+          }
         }
-        if (stroke) for (const points of outlines) for (const piece of clipPolyline(points)) add(piece, stroke);
+        if (item.stroke) {
+          for (const points of item.outlines) {
+            for (const piece of clipPolyline(points)) {
+              if (hasOccluder) for (const vis of clipAgainstMask(piece, occluder)) addToOut(vis, item.stroke);
+              else addToOut(piece, item.stroke);
+            }
+          }
+        }
+        if (mask && area > 0 && item.fillOpacity >= 0.9) {
+          for (let i = 0; i < mask.length; i++) occluder[i] |= mask[i];
+          hasOccluder = true;
+        }
+        ordered[idx] = out;
       }
+      const strokes = [];
+      for (const out of ordered) strokes.push(...out);
       if (!strokes.length) throw new Error("This SVG has no visible, supported paths to plot.");
       return strokes;
     } finally { frame.remove(); }
@@ -272,7 +350,7 @@
     return strokes;
   }
 
-  const api = { DEFAULT_PALETTE, isColor, nearestTool, splitPath, clipPolyline, importSvg, fitToBed };
+  const api = { DEFAULT_PALETTE, isColor, nearestTool, splitPath, clipPolyline, clipAgainstMask, importSvg, fitToBed };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else window.PlotterColor = api;
 })();
