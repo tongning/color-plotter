@@ -1,7 +1,7 @@
 
 /* Color matching and SVG geometry conversion. No network or third-party runtime. */
 (() => {
-  const DEFAULT_PALETTE = ["#202124", "#e53935", "#f58220", "#f4ce28", "#2e9d52", "#00a7b5", "#3367d6", "#8e44ad"];
+  const DEFAULT_PALETTE = ["#2c2d30", "#e42e2a", "#c65a93", "#08b1dc", "#7bae44", "#0497bd", "#2d4e9e", "#533c94"];
   const SIZE = 480;
   const isColor = (value) => typeof value === "string" && /^#[\da-f]{6}$/i.test(value);
 
