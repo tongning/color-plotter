@@ -137,6 +137,17 @@
     return pieces;
   }
 
+  // A fill's outline is a loop; sampled open paths (polyline, or a path
+  // whose close is only implicit in the fill) need their closing edge
+  // added so the perimeter draws complete. Closed loops pass through
+  // unchanged. Returns a new array only when a point is added.
+  function closeLoop(points) {
+    if (points.length < 3) return points;
+    const first = points[0], last = points[points.length - 1];
+    if (Math.hypot(first.x - last.x, first.y - last.y) <= 1e-6) return points;
+    return [...points, first];
+  }
+
   // Yield to the UI thread so a big import stays responsive (and a progress
   // callback can paint). setTimeout(0) works in every browser the app runs
   // in, including file://, where a Worker-based import is not an option
@@ -269,12 +280,12 @@
       // Phase 2: hidden-line removal. Walk the elements in reverse
       // (painter's algorithm): keep a running union of the opaque fill
       // masks from later-painted elements, and clip each earlier stroke
-      // (and each earlier fill's hatch) against it, so lines behind a
-      // solid fill are never plotted. A fill's own outline is clipped
-      // only by later fills, never by its own fill, because the mask is
-      // added to the occluder after the element's own strokes are done.
-      // White is paper, not ink: an opaque white fill occludes but is
-      // never hatched (it used to hatch sky blue via nearestTool).
+      // (and each earlier fill's hatch and outline) against it, so lines
+      // behind a solid fill are never plotted. A fill's own outline is
+      // clipped only by later fills, never by its own fill, because the
+      // mask is added to the occluder after the element's own strokes
+      // are done. White is paper, not ink: an opaque white fill occludes
+      // but is never hatched (it used to hatch sky blue via nearestTool).
       // Only opaque fills (fill-opacity >= 0.9) occlude; semi-transparent
       // fills don't hide what's behind them.
       const occluder = new Uint8Array(SIZE * SIZE);
@@ -314,9 +325,28 @@
           // pass them through for a vector hatch of the solid parts.
           // White is paper: never hatched.
           if (area > 0 && item.fill !== "#ffffff") {
-            for (const path of fillStrokes(mask, item.outlines)) {
+            const hatched = fillStrokes(mask, item.outlines);
+            for (const path of hatched) {
               if (hasOccluder) for (const vis of clipAgainstMask(path, occluder)) addToOut(vis, item.fill);
               else addToOut(path, item.fill);
+            }
+            // A fill's outer perimeter gives the fill its form: without
+            // it the hatch ends ragged at the edge and the shape reads
+            // as a blob. Draw the outline in the fill's own colour,
+            // after the hatch, clipped against later fills like any
+            // other stroke. Only when the element has no stroke of its
+            // own (a stroked shape already draws its perimeter), and
+            // only when the fill was actually hatched: narrow ribbons
+            // reduce to a centerline that already is their form, and an
+            // extra perimeter there would just double the ink. White
+            // fills get no outline either — there is no white pen.
+            if (!item.stroke && hatched.hasSolid) {
+              for (const points of item.outlines) {
+                for (const piece of clipPolyline(closeLoop(points))) {
+                  if (hasOccluder) for (const vis of clipAgainstMask(piece, occluder)) addToOut(vis, item.fill);
+                  else addToOut(piece, item.fill);
+                }
+              }
             }
           }
         }
@@ -380,7 +410,7 @@
     return strokes;
   }
 
-  const api = { DEFAULT_PALETTE, isColor, nearestTool, splitPath, clipPolyline, clipAgainstMask, importSvg, fitToBed };
+  const api = { DEFAULT_PALETTE, isColor, nearestTool, splitPath, clipPolyline, clipAgainstMask, closeLoop, importSvg, fitToBed };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else window.PlotterColor = api;
 })();
