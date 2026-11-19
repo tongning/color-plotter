@@ -1523,8 +1523,8 @@ function hatchStrokes(inside, alpha = null) {
 }
 
 
-function svgFillStrokes(inside, outlines) {
-  return PlotterFill.svgFillStrokes(inside, FILL_RASTER, FILL_SPACING, FILL_EDGE_GAP, FILL_CONNECT_MAX, outlines);
+function svgFillStrokes(inside, outlines, alpha) {
+  return PlotterFill.svgFillStrokes(inside, FILL_RASTER, FILL_SPACING, FILL_EDGE_GAP, FILL_CONNECT_MAX, outlines, alpha);
 }
 
 function fillAt(point) {

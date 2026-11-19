@@ -159,7 +159,13 @@
       const nx = x + direction, ny = y + direction;
       if (nx < 0 || nx >= size || ny < 0 || ny >= size) return cappedExtension;
       const a0 = alpha[index], a1 = alpha[ny * size + nx];
-      if (!(a1 > 32) || a0 > 32) return cappedExtension;
+      // The boundary (coverage 32) must straddle the two pixels: either
+      // the stroke-coverage convention of the canvas fill (coverage rises
+      // from the endpoint pixel to the stroke pixel beyond it) or the
+      // fill-coverage convention of an SVG import (coverage falls from the
+      // fill pixel to the outside pixel beyond it). The crossing fraction
+      // is the same formula in both directions.
+      if (a1 === a0 || (a0 > 32) === (a1 > 32)) return cappedExtension;
       const t = Math.max(0, Math.min(1, (32 - a0) / (a1 - a0)));
       const ext = t * Math.SQRT2 - edgeGap;
       const capped = edgeGap < 0 ? ext : Math.min(0.6, ext);
@@ -469,7 +475,10 @@
   }
   // Traced line art often encodes an ink line as a narrow filled ribbon.
   // Separate those components from solid areas before deciding how to plot them.
-  function svgFillStrokes(mask, size, spacing, edgeGap = 0, connectMax = 4 * spacing, outlines) {
+  // `outlines` is retained for API compatibility (callers pass the element's
+  // vector outlines); the fill itself no longer uses them. `alpha` is the
+  // anti-aliased coverage of the fill, for sub-pixel run endpoints.
+  function svgFillStrokes(mask, size, spacing, edgeGap = 0, connectMax = 4 * spacing, outlines, alpha = null) {
     const total = size * size;
     const depth = new Float32Array(total);
     const root2 = Math.SQRT2;
@@ -492,7 +501,18 @@
       queue[0]=seed;visited[seed]=1;
       while(head<tail) {
         const i=queue[head++],x=i%size,y=Math.floor(i/size);
-        if(depth[i]>Math.max(2,spacing*1.5)) core++;
+        // A component is solid when it has a core deeper than the hatch
+        // spacing: it is wide enough for two hatch lines across (width
+        // > 2x spacing). The old bar was spacing*1.5 (3.75px at the
+        // 2.5px hatch spacing), which needed a band ~8px wide before any
+        // pixel counted as core — so filled bands 5-7px wide in the mask
+        // (the DC Metro lines are 5-7px, ~1.2-1.7mm on the bed) were
+        // misread as traced ink lines and reduced to a single
+        // centreline instead of being hatched. Traced ink lines are
+        // 4px or narrower in the mask and still centreline, including
+        // diagonal ones: a 5px diagonal ribbon is only ~3.8px across,
+        // its centre depth 2.41, under the 2.5 bar.
+        if(depth[i]>spacing) core++;
         for(let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++) {
           if((!dx&&!dy)||x+dx<0||x+dx>=size||y+dy<0||y+dy>=size) continue;
           const next=(y+dy)*size+x+dx;
@@ -504,31 +524,15 @@
       for(let j=0;j<tail;j++) target[queue[j]]=1;
     }
     const centerlines = centerlineStrokes(narrow, size);
-    // Vector-hatch the solid parts from the SVG outlines when the element
-    // is entirely solid (no narrow ribbons): the outlines are the fill
-    // boundaries, so the hatch gets sub-pixel endpoints and smooth
-    // connectors instead of a pixel staircase. The outlines need no
-    // inward offset (unlike the canvas fill, where the loop is a stroke
-    // centreline): they already are the fill edge. When the element has
-    // narrow parts, or no outlines were passed, hatch the solid mask on
-    // the raster as before. The vector module loads after this one, so
-    // read it off the global at call time (no circular require).
-    let solidStrokes = [];
-    const hasNarrow = narrow.some((v) => v);
-    const vectorFill = typeof globalThis !== "undefined" ? globalThis.PlotterVectorFill : null;
-    if (outlines && outlines.length && !hasNarrow && vectorFill && vectorFill.hatchPolygons) {
-      const polygons = outlines
-        .map((pts) => pts.map((p) => ({ x: p.x * size, y: p.y * size })))
-        .filter((poly) => poly.length >= 3);
-      if (polygons.length) {
-        try {
-          solidStrokes = vectorFill.hatchPolygons(polygons, size, spacing, edgeGap, connectMax) || [];
-        } catch (e) {
-          solidStrokes = [];
-        }
-      }
-    }
-    if (!solidStrokes.length) solidStrokes = hatchStrokes(solid, size, spacing, edgeGap, connectMax);
+    // Solid parts use the same raster hatch as the canvas fill tool
+    // (scanline runs, wall-hugging connectors smoothed by simplifyPath,
+    // sub-pixel run endpoints from the alpha when given) — not the vector
+    // hatch. Fills then look the same whether they came from an import
+    // or from the fill tool, and the raster hatch cannot hang on a
+    // curved hole boundary the way a vector clip can. The element's
+    // outer perimeter is drawn separately, from its exact vector outline
+    // (see importSvg), never from this raster.
+    const solidStrokes = hatchStrokes(solid, size, spacing, edgeGap, connectMax, alpha);
     const strokes = [...centerlines, ...solidStrokes];
     // The importer draws a filled shape's outer perimeter only when the
     // shape was actually hatched (solid area). Narrow ribbons reduce to

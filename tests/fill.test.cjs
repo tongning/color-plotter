@@ -154,7 +154,12 @@ test('tiny islands between scanlines are retained and empty masks stay empty',()
 const { svgFillStrokes } = require('../fill-path.js');
 test('SVG traced diagonal ribbons become a single centerline without hatch oscillations',()=>{
   const mask=maskFor((x,y)=>x>=8&&x<88&&Math.abs(y-x)<=2);
-  const strokes=svgFillStrokes(mask,size,2);
+  // At the app's 2.5px hatch spacing: the ribbon is only ~3.8px across
+  // (centre depth 2.41), under the 2x-spacing width a hatch needs, so it
+  // stays a centreline. (At a 2px spacing the same ribbon would hatch —
+  // the chamfer depth overestimates diagonal widths — so this pins the
+  // app's spacing, not an arbitrary one.)
+  const strokes=svgFillStrokes(mask,size,2.5);
   assert.equal(strokes.length,1);
   assert.ok(strokes[0].length<10,`unexpected zigzag: ${strokes[0].length} points`);
   assert.ok(length(strokes)<120,`centerline doubled back: ${length(strokes)}`);

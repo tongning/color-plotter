@@ -24,17 +24,26 @@ document.querySelector('#app').onload = async ({ target }) => {
     check(paths.length === 2 && paths[1][0].x === .5, 'Relative compound subpaths stay separate');
     paths = await convert(svg('<path fill="red" fill-rule="evenodd" d="M0 0H100V100H0Z M25 25H75V75H25Z"/>'));
     check(paths.length > 0 && paths.every(p => p.color === '#ff0000'), 'Solid fills create colored hatch paths');
+    // The hole edge allows a 0.002 inset (~1px in the 480 raster): the
+    // raster fill deliberately overlaps its edge by up to ~0.7px (the
+    // skin overlap that joins the fill to its outline), so a point can
+    // sit just inside the hole's nominal edge without the hole being
+    // hatched. The outline drawn over it covers the overlap.
     check(paths.every(path => path.slice(1).every((b, i) => {
       const a = path[i], steps = Math.max(1, Math.ceil(Math.hypot(b.x-a.x, b.y-a.y)*960));
       for (let j = 0; j <= steps; j++) {
         const x = a.x+(b.x-a.x)*j/steps, y = a.y+(b.y-a.y)*j/steps;
-        if (x > .251 && x < .749 && y > .251 && y < .749) return false;
+        if (x > .252 && x < .748 && y > .252 && y < .748) return false;
       }
       return true;
     })), 'Even-odd fill holes remain empty along every hatch and connector');
+    // A 1-unit bar is 4.8px in the 480 raster, wide enough for two hatch
+    // lines, so it is a filled area now (hatch + perimeter), not a traced
+    // ink line: 2 paths. Both stay on the bar apart from the fill's skin
+    // overlap (~0.002) past its edges.
     paths = await convert(svg('<path fill="red" d="M10 10H11V90H10Z"/>'));
-    check(paths.length === 1 && paths[0].length > 1, 'Thin fill-only SVG artwork imports instead of being discarded');
-    check(paths[0].every(p => p.x >= .1 && p.x <= .11), 'Thin fill routing stays inside the shape');
+    check(paths.length === 2 && paths.every(p => p.length > 1), 'Thin fill-only SVG artwork imports instead of being discarded');
+    check(paths.every(p => p.every(pt => pt.x >= .097 && pt.x <= .113)), 'Thin fill routing stays inside the shape');
     paths = await convert('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 480"><path fill="black" fill-rule="evenodd" d="M50 50H250V250H50Z M53 53H247V247H53Z"/></svg>');
     check(paths.length === 1 && paths[0].length < 20, 'Traced filled outlines become one compact centerline loop');
     const outlineLength = paths[0].slice(1).reduce((sum,p,i) => sum + Math.hypot(p.x-paths[0][i].x,p.y-paths[0][i].y)*480,0);
@@ -119,9 +128,10 @@ document.querySelector('#app').onload = async ({ target }) => {
       observer.observe(w.document.querySelector('#importProgress'), {childList:true,subtree:true,attributes:true});
       fileInput.dispatchEvent(new w.Event('change', {bubbles:true}));
     });
-    // 3 paths, not 2: the blue rect occludes the red diagonal, splitting it
-    // into two visible pieces, plus the blue fill's own centerline.
-    check(evaluate('state.strokes.length') === 3 && evaluate('new Set(state.strokes.map(toolForStroke)).size') === 2, 'File upload retains thin SVG fills and opens an editable preview with two markers');
+    // 4 paths, not 3: the blue rect occludes the red diagonal, splitting it
+    // into two visible pieces, plus the blue fill's own hatch and perimeter
+    // (a 1-unit bar is wide enough to hatch now, not a traced centreline).
+    check(evaluate('state.strokes.length') === 4 && evaluate('new Set(state.strokes.map(toolForStroke)).size') === 2, 'File upload retains thin SVG fills and opens an editable preview with two markers');
     check(JSON.stringify(w.generateGcode().match(/^T\d+/gm)) === JSON.stringify(['T1','T6']), 'File import produces the expected marker changes');
     check(w.document.querySelector('#viewDraw').classList.contains('hidden') === false, 'Successful SVG import opens drawing view');
     w.showView('draw');
