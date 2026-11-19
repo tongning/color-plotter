@@ -501,18 +501,17 @@
       queue[0]=seed;visited[seed]=1;
       while(head<tail) {
         const i=queue[head++],x=i%size,y=Math.floor(i/size);
-        // A component is solid when it has a core deeper than the hatch
-        // spacing: it is wide enough for two hatch lines across (width
-        // > 2x spacing). The old bar was spacing*1.5 (3.75px at the
-        // 2.5px hatch spacing), which needed a band ~8px wide before any
-        // pixel counted as core — so filled bands 5-7px wide in the mask
-        // (the DC Metro lines are 5-7px, ~1.2-1.7mm on the bed) were
-        // misread as traced ink lines and reduced to a single
-        // centreline instead of being hatched. Traced ink lines are
-        // 4px or narrower in the mask and still centreline, including
-        // diagonal ones: a 5px diagonal ribbon is only ~3.8px across,
-        // its centre depth 2.41, under the 2.5 bar.
-        if(depth[i]>spacing) core++;
+        // A component is solid when it has a core deeper than 2px: the
+        // raster hatch only needs the shape to hold one hatch line, so
+        // anything 5px or wider hatches. The floor is 2, not lower: at
+        // depth > 1 a 3px traced outline hatches into a sawtooth around
+        // the ring instead of one clean loop (the hatch oscillates when
+        // the ribbon is narrower than the scanline step), so 3-4px traced
+        // ink lines still reduce to a centreline. (The old bars were
+        // spacing*1.5, then spacing: both needed a band ~5-8px wide
+        // before any pixel counted as core, so the 5-7px DC Metro bands
+        // were misread as traced ink lines.)
+        if(depth[i]>2) core++;
         for(let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++) {
           if((!dx&&!dy)||x+dx<0||x+dx>=size||y+dy<0||y+dy>=size) continue;
           const next=(y+dy)*size+x+dx;
