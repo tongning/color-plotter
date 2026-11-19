@@ -79,3 +79,21 @@ test('edge cases: empty, single, and two strokes', () => {
   const second = [{ x: 0.9, y: 0.9 }, { x: 0.8, y: 0.9 }];
   assert.deepEqual(orderByNearestNeighbour([first, second]), [first, second]);
 });
+
+test('ordering 5000 scattered strokes is fast and keeps every stroke once', () => {
+  // Regression: the old O(S^2) scan took ~850ms at 5000 strokes and 12.8s
+  // at 20000 (stipple imports). The bucket grid must stay near-instant.
+  let seed = 12345;
+  const rand = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+  const input = Array.from({ length: 5000 }, () => {
+    const x = rand(), y = rand();
+    return [{ x, y }, { x: Math.min(0.99, x + 0.002), y }];
+  });
+  const t0 = Date.now();
+  const ordered = orderByNearestNeighbour(input);
+  const ms = Date.now() - t0;
+  assert.equal(ordered.length, 5000);
+  assert.equal(new Set(ordered).size, 5000, 'every stroke exactly once');
+  assert.ok(travelDistance(ordered) < travelDistance(input), 'ordering must cut travel');
+  assert.ok(ms < 3000, `5000-stroke ordering took ${ms}ms, must stay under 3s`);
+});

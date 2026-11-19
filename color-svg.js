@@ -137,7 +137,22 @@
     return pieces;
   }
 
-  async function importSvg(text, fillStrokes) {
+  // Yield to the UI thread so a big import stays responsive (and a progress
+  // callback can paint). setTimeout(0) works in every browser the app runs
+  // in, including file://, where a Worker-based import is not an option
+  // anyway: import needs DOMParser, getComputedStyle, getTotalLength and a
+  // canvas, none of which exist in a worker.
+  const yieldUi = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  async function importSvg(text, fillStrokes, onProgress) {
+    const report = (done, total, label) => { if (onProgress) onProgress(done, total, label); };
+    // Yield at most every ~8ms of work: a yield per element would cost
+    // more in timer overhead than the element itself on a 20k-dot file.
+    let lastYield = 0;
+    const maybeYield = async () => {
+      const now = Date.now();
+      if (now - lastYield >= 8) { lastYield = now; await yieldUi(); }
+    };
     const parsed = new DOMParser().parseFromString(text, "image/svg+xml");
     const source = parsed.documentElement;
     if (source.localName !== "svg" || parsed.querySelector("parsererror")) throw new Error("This file is not a valid SVG.");
@@ -198,8 +213,13 @@
       }
       // Phase 1: collect every element's outlines, fill and stroke in
       // document order. Nothing is plotted yet.
+      const elements = [...svg.querySelectorAll("path,rect,circle,ellipse,line,polyline,polygon")];
       const items = [];
-      for (const element of svg.querySelectorAll("path,rect,circle,ellipse,line,polyline,polygon")) {
+      let elementIndex = 0;
+      for (const element of elements) {
+        elementIndex++;
+        await maybeYield();
+        report(elementIndex, elements.length, "Reading paths");
         if (element.closest("defs")) continue;
         const style = frame.contentWindow.getComputedStyle(element);
         let opacity = 1, hidden = false;
@@ -226,12 +246,20 @@
             if (part !== null) element.setAttribute("d", part);
             const length = element.getTotalLength();
             if (!Number.isFinite(length) || length <= 0) continue;
-            const steps = Math.max(1, Math.ceil(length * scale));
+            // One sample per unit (0.25mm) is far finer than the 1.6mm pen
+            // can show, and getPointAtLength is the slowest call in the
+            // import — a 20k-point TSP path is ~12,000 units long. Long
+            // paths sample every 2.5 units (0.6mm, still well under pen
+            // width); short paths keep the fine step.
+            const rawSteps = Math.ceil(length * scale);
+            const step = rawSteps > 6000 ? 2.5 : 1;
+            const steps = Math.max(1, Math.ceil(rawSteps / step));
             const points = [];
             for (let i = 0; i <= steps; i++) {
               const p = element.getPointAtLength(length * i / steps).matrixTransform(matrix);
               if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) throw new Error("SVG has invalid transformed coordinates.");
               points.push({ x: p.x / SIZE, y: p.y / SIZE });
+              if (i % 2048 === 2047) await maybeYield();
             }
             outlines.push(points);
           }
@@ -253,6 +281,8 @@
       let hasOccluder = false;
       const ordered = new Array(items.length);
       for (let idx = items.length - 1; idx >= 0; idx--) {
+        await maybeYield();
+        report(items.length - idx, items.length, "Removing hidden lines");
         const item = items[idx];
         const out = [];
         function addToOut(points, color) {

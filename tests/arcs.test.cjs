@@ -251,3 +251,38 @@ test('emitted arcs keep start/end radii equal within RRF limits', () => {
   }
   assert.ok(maxDiff <= 0.0022, `max radius difference ${maxDiff.toFixed(5)}mm must stay under RRF's 0.0022mm CNC limit`);
 });
+
+test('a long jagged stroke fits fast (TSP regression)', () => {
+  // A 2000-point jagged polyline used to take 3.3s in fitArcs, and a 20k
+  // one never finished: the longest-run search is capped at 64 points and
+  // the bounds check runs last, after the cheap radial/sagitta checks.
+  let seed = 42;
+  const rand = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+  const pts = [];
+  let x = 59, y = 59;
+  for (let i = 0; i < 2000; i++) {
+    x = Math.max(1, Math.min(117, x + (rand() - 0.5) * 2.4));
+    y = Math.max(1, Math.min(117, y + (rand() - 0.5) * 2.4));
+    pts.push({ x, y });
+  }
+  const t0 = Date.now();
+  const moves = fitArcs(pts, 0.1, { minX: 0, minY: 0, maxX: 118, maxY: 118 });
+  const ms = Date.now() - t0;
+  assert.ok(moves.length > 0);
+  assert.equal(moves[moves.length - 1].to.x, pts[pts.length - 1].x, 'last move must end at the last point');
+  assert.ok(maxDeviation(pts, moves) <= 0.15, 'fitted moves must stay within tolerance of the polyline');
+  assert.ok(ms < 3000, `2000-point jagged fitArcs took ${ms}ms, must stay under 3s`);
+});
+
+test('a long smooth circle still collapses to arcs', () => {
+  // The 64-point run cap must not turn long smooth curves into line soup:
+  // a 2000-point circle should still be a few dozen arcs, not 2000 lines.
+  const circ = Array.from({ length: 2001 }, (_, i) => {
+    const a = i / 2000 * Math.PI * 2;
+    return { x: 59 + Math.cos(a) * 30, y: 59 + Math.sin(a) * 30 };
+  });
+  const moves = fitArcs(circ);
+  assert.ok(moves.length < 100, `2000-point circle should collapse, got ${moves.length} moves`);
+  assert.ok(moves.every((m) => m.type === 'arc'), 'circle moves should all be arcs');
+  assert.ok(maxDeviation(circ, moves) <= 0.15, 'circle arcs must stay within tolerance');
+});

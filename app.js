@@ -298,16 +298,22 @@ function arcStaysInBounds(center, radius, a1, signedAngle, bounds) {
 function fitArcs(points, tolerance = 0.1, bounds = null) {
   const moves = [];
   let i = 0;
+  // Cap the longest-run search: trying every run to the end of the stroke
+  // is O(n^2) attempts, and on a jagged 20k-point TSP stroke each attempt
+  // ran the (sampling) bounds check before the radial check ever got a
+  // say — measured >150s for one stroke. A 64-point run already covers
+  // any arc the firmware can use; longer smooth runs just become a few
+  // more G2/G3 moves. The cheap radial/sagitta checks run first and the
+  // sampling bounds check only runs for a run that already fits.
+  const MAX_RUN = 64;
   while (i < points.length - 1) {
     let best = null;
     // Longest run first, shrink until one fits.
-    for (let j = points.length - 1; j > i + 1; j--) {
+    for (let j = Math.min(points.length - 1, i + MAX_RUN); j > i + 1; j--) {
       const circle = circleThrough(points[i], points[Math.floor((i + j) / 2)], points[j]);
       if (!circle || circle.r < 0.5 || circle.r > 500) continue;
       const angle = arcAngle(circle, points[i], points[j]);
       if (Math.abs(angle) >= Math.PI) continue; // firmware takes the minor arc
-      const a1 = Math.atan2(points[i].y - circle.y, points[i].x - circle.x);
-      if (!arcStaysInBounds(circle, circle.r, a1, angle, bounds)) continue;
       let ok = true;
       let epsR = 0; // max radial deviation of the run's vertices from the circle
       for (let k = i + 1; k < j; k++) {
@@ -382,6 +388,14 @@ function fitArcs(points, tolerance = 0.1, bounds = null) {
             if (dist > tolerance * 0.9) { ok = false; break; }
           }
         }
+      }
+      // Bounds last: arcStaysInBounds samples along the sweep, so it only
+      // runs for a run that already fits the polyline. It used to run
+      // before the radial check, which made every rejected long run pay
+      // for a full sweep sample.
+      if (ok) {
+        const a1 = Math.atan2(points[i].y - circle.y, points[i].x - circle.x);
+        if (!arcStaysInBounds(circle, circle.r, a1, angle, bounds)) ok = false;
       }
       if (ok) { best = { end: j, center: circle, clockwise: angle < 0 }; break; }
     }
@@ -615,37 +629,121 @@ function plotReadyStroke(stroke) {
 // stroke is drawn from its nearer end, so the pen ends at the far end.
 function orderByNearestNeighbour(strokes) {
   if (strokes.length <= 1) return strokes.slice();
-  const remaining = strokes.map((stroke) => ({
+  const entries = strokes.map((stroke) => ({
     stroke,
     start: plotPoint(stroke[0]),
     end: plotPoint(stroke[stroke.length - 1]),
+    used: false,
   }));
+  // Spatial bucket grid over the endpoints. The old version scanned every
+  // remaining stroke for each pick (and spliced the array): O(S^2), 12.8s
+  // for 20k stipple strokes. Buckets keep the same greedy rule — always
+  // the nearest unused endpoint — but the search only visits cells near
+  // the pen. Rings expand until the next ring's closest possible point is
+  // farther than the best already found, so the pick is still the exact
+  // nearest neighbour, not an approximation.
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const e of entries) {
+    for (const p of [e.start, e.end]) {
+      if (p.x < minX) minX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y > maxY) maxY = p.y;
+    }
+  }
+  const side = Math.max(2, Math.min(256, Math.ceil(Math.sqrt(entries.length * 2))));
+  const cell = Math.max((maxX - minX) / side, (maxY - minY) / side, 1e-9);
+  const cols = Math.max(1, Math.ceil((maxX - minX) / cell) + 1);
+  const rows = Math.max(1, Math.ceil((maxY - minY) / cell) + 1);
+  const buckets = new Map();
+  const cellOf = (p) => ({
+    cx: Math.max(0, Math.min(cols - 1, Math.floor((p.x - minX) / cell))),
+    cy: Math.max(0, Math.min(rows - 1, Math.floor((p.y - minY) / cell))),
+  });
+  entries.forEach((e, i) => {
+    for (const key of new Set([cellOf(e.start), cellOf(e.end)].map((c) => c.cy * cols + c.cx))) {
+      if (!buckets.has(key)) buckets.set(key, []);
+      buckets.get(key).push(i);
+    }
+  });
   const ordered = [];
   // First stroke: no known pen position, keep the group's original order.
-  let current = remaining.shift();
+  let current = entries[0];
+  current.used = true;
   ordered.push(current.stroke);
   let pen = current.end;
-  while (remaining.length) {
-    let bestIndex = 0;
+  let remaining = entries.length - 1;
+  while (remaining > 0) {
+    const penCell = cellOf(pen);
+    let best = null;
     let bestDistance = Infinity;
-    for (let i = 0; i < remaining.length; i++) {
-      const toStart = distance(pen, remaining[i].start);
-      if (toStart < bestDistance) { bestDistance = toStart; bestIndex = i; }
-      const toEnd = distance(pen, remaining[i].end);
-      if (toEnd < bestDistance) { bestDistance = toEnd; bestIndex = i; }
+    let bestFromStart = true;
+    // Examine rings around the pen cell. A cell at Chebyshev distance k
+    // can hold a point no closer than (k-1)*cell, so once the best found
+    // beats that bound for the next ring, no farther cell can win.
+    for (let ring = 0; ; ring++) {
+      for (let cy = penCell.cy - ring; cy <= penCell.cy + ring; cy++) {
+        if (cy < 0 || cy >= rows) continue;
+        for (let cx = penCell.cx - ring; cx <= penCell.cx + ring; cx++) {
+          if (cx < 0 || cx >= cols) continue;
+          if (Math.max(Math.abs(cx - penCell.cx), Math.abs(cy - penCell.cy)) !== ring) continue;
+          const bucket = buckets.get(cy * cols + cx);
+          if (!bucket) continue;
+          for (const i of bucket) {
+            const e = entries[i];
+            if (e.used) continue;
+            const toStart = distance(pen, e.start);
+            if (toStart < bestDistance) { bestDistance = toStart; best = e; bestFromStart = true; }
+            const toEnd = distance(pen, e.end);
+            if (toEnd < bestDistance) { bestDistance = toEnd; best = e; bestFromStart = false; }
+          }
+        }
+      }
+      if (best && bestDistance <= ring * cell) break;
+      if (ring > cols + rows) break; // unreachable: a best always exists while remaining > 0
     }
-    current = remaining.splice(bestIndex, 1)[0];
+    current = best;
+    current.used = true;
     ordered.push(current.stroke);
+    remaining--;
     // The caller draws from the nearer end, so the pen ends at the far end.
     // (On a tie the caller draws from the start, matching the <= here.)
-    pen = distance(pen, current.start) <= distance(pen, current.end) ? current.end : current.start;
+    pen = bestFromStart ? current.end : current.start;
   }
   return ordered;
+}
+
+// G-code cache: refreshGcodePreview() calls generateGcode() on every
+// updateUi() while the panel is open, and Draw/Download call it again —
+// rebuilding a 20k-point job from scratch every time. Fingerprint the
+// inputs (stroke points/colors/flags, bed, feeds, palette) with a cheap
+// FNV-1a pass and return the cached job when nothing changed. The header
+// date freezes at the first build; it is only a comment.
+let gcodeCache = { fingerprint: null, text: "" };
+function gcodeFingerprint() {
+  const { width, height } = dimensions();
+  const { draw, travel } = feeds();
+  let h = 2166136261 >>> 0;
+  const mix = (v) => { h ^= v >>> 0; h = Math.imul(h, 16777619) >>> 0; };
+  mix(Math.round(width * 1000)); mix(Math.round(height * 1000));
+  mix(Math.round(draw)); mix(Math.round(travel));
+  for (const c of markerPalette.join("")) mix(c.charCodeAt(0));
+  mix(state.strokes.length);
+  for (const stroke of state.strokes) {
+    mix(stroke.length);
+    if (stroke.color) for (const c of stroke.color) mix(c.charCodeAt(0));
+    if (stroke.shape) mix(1);
+    if (stroke.squiggle) mix(2);
+    for (const p of stroke) { mix(Math.round(p.x * 1e6)); mix(Math.round(p.y * 1e6)); }
+  }
+  return h >>> 0;
 }
 
 function generateGcode() {
   const { width, height } = dimensions();
   const { draw, travel } = feeds();
+  const fingerprint = gcodeFingerprint();
+  if (gcodeCache.fingerprint === fingerprint) return gcodeCache.text;
   const date = new Date().toISOString();
   const lines = [
     "; Generated by Small Plotter",
@@ -762,7 +860,9 @@ function generateGcode() {
     "M84",
     "; End of Small Plotter job"
   );
-  return `${lines.join("\n")}\n`;
+  const text = `${lines.join("\n")}\n`;
+  gcodeCache = { fingerprint, text };
+  return text;
 }
 
 /* ---------- application log ---------- */
@@ -2870,9 +2970,17 @@ $("#svgFile").addEventListener("change", async (event) => {
   if (!file) return;
   $("#importSvgButton").disabled = true;
   $("#goSvg").disabled = true;
+  const importProgress = $("#importProgress");
   try {
     const { width: bedWidth, height: bedHeight } = dimensions();
-    const strokes = PlotterColor.fitToBed(await PlotterColor.importSvg(await file.text(), svgFillStrokes), bedWidth, bedHeight);
+    // importSvg yields between chunks, so this stays live on big files
+    // instead of freezing the tab until the whole import lands.
+    const onProgress = (done, total, label) => {
+      importProgress.textContent = total > 0 ? `${label}… ${Math.round((done / total) * 100)}%` : `${label}…`;
+      importProgress.classList.remove("hidden");
+    };
+    const strokes = PlotterColor.fitToBed(await PlotterColor.importSvg(await file.text(), svgFillStrokes, onProgress), bedWidth, bedHeight);
+    importProgress.classList.add("hidden");
     // Replace the current artwork only after the complete import succeeds.
     snapshot();
     setSquiggleSource(null);
@@ -2888,6 +2996,7 @@ $("#svgFile").addEventListener("change", async (event) => {
   } catch (error) {
     showToast(error.message || "Could not import this SVG.", "error");
   } finally {
+    importProgress.classList.add("hidden");
     event.target.value = "";
     $("#importSvgButton").disabled = false;
     $("#goSvg").disabled = false;
