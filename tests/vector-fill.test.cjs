@@ -238,8 +238,10 @@ test('SVG solid circle raster-hatches with a smooth edge', () => {
     alpha[y * size + x] = Math.round(cov / 16 * 255);
     mask[y * size + x] = alpha[y * size + x] > 127 ? 1 : 0;
   }
+  // The mask is thresholded at 127, so the sub-pixel boundary is 127 too
+  // (the value an SVG import passes).
   const strokes = svgFillStrokes(mask, size, spacing, edgeGap, connectMax,
-    [outlineFrom([...circ, circ[0]])], alpha);
+    [outlineFrom([...circ, circ[0]])], alpha, 127);
   assert.ok(strokes.length >= 1);
   // The drawn stroke near the boundary hugs the true circle (radius 28).
   // The raster hatch runs on pixel centres with sub-pixel endpoints and

@@ -132,14 +132,18 @@
   // the strokes that bound the region. When it is given, a run endpoint
   // is placed at the true (sub-pixel) boundary instead of a fixed
   // extension: the pixel just beyond the endpoint is the first stroke
-  // pixel, and the boundary (alpha = 32, the coverage threshold) sits a
-  // fraction t of the way from the endpoint pixel centre to it. The
-  // endpoint extends to that crossing plus the requested overlap past
-  // the edge (-edgeGap), so the fill hugs the smooth wall instead of a
-  // pixel staircase. When there is no stroke pixel beyond the endpoint
-  // (a hole, or the canvas edge) the crossing is undefined and the
-  // endpoint falls back to the fixed extension.
-  function hatchStrokes(inside, size, spacing, edgeGap = 0, connectMax = 4 * spacing, alpha = null) {
+  // pixel, and the boundary (alpha = `boundary`, the coverage threshold
+  // the mask was built with) sits a fraction t of the way from the
+  // endpoint pixel centre to it. The endpoint extends to that crossing
+  // plus the requested overlap past the edge (-edgeGap), so the fill
+  // hugs the smooth wall instead of a pixel staircase. When there is no
+  // stroke pixel beyond the endpoint (a hole, or the canvas edge) the
+  // crossing is undefined and the endpoint falls back to the fixed
+  // extension. `boundary` must match the mask's threshold: the canvas
+  // fill tool builds its mask at 32, an SVG import at 127. Using 32 for
+  // an import puts the crossing ~0.4px past the true edge, so the fill
+  // pokes visibly outside its own outline.
+  function hatchStrokes(inside, size, spacing, edgeGap = 0, connectMax = 4 * spacing, alpha = null, boundary = 32) {
     const total = size * size;
     const step = Math.max(1, Math.round(spacing * Math.SQRT2));
     // A run endpoint sits at its pixel centre; the edge along the diagonal
@@ -159,14 +163,14 @@
       const nx = x + direction, ny = y + direction;
       if (nx < 0 || nx >= size || ny < 0 || ny >= size) return cappedExtension;
       const a0 = alpha[index], a1 = alpha[ny * size + nx];
-      // The boundary (coverage 32) must straddle the two pixels: either
-      // the stroke-coverage convention of the canvas fill (coverage rises
-      // from the endpoint pixel to the stroke pixel beyond it) or the
-      // fill-coverage convention of an SVG import (coverage falls from the
-      // fill pixel to the outside pixel beyond it). The crossing fraction
-      // is the same formula in both directions.
-      if (a1 === a0 || (a0 > 32) === (a1 > 32)) return cappedExtension;
-      const t = Math.max(0, Math.min(1, (32 - a0) / (a1 - a0)));
+      // The boundary (coverage `boundary`) must straddle the two pixels:
+      // either the stroke-coverage convention of the canvas fill
+      // (coverage rises from the endpoint pixel to the stroke pixel
+      // beyond it) or the fill-coverage convention of an SVG import
+      // (coverage falls from the fill pixel to the outside pixel beyond
+      // it). The crossing fraction is the same formula in both directions.
+      if (a1 === a0 || (a0 > boundary) === (a1 > boundary)) return cappedExtension;
+      const t = Math.max(0, Math.min(1, (boundary - a0) / (a1 - a0)));
       const ext = t * Math.SQRT2 - edgeGap;
       const capped = edgeGap < 0 ? ext : Math.min(0.6, ext);
       return Math.max(0, capped);
@@ -477,8 +481,10 @@
   // Separate those components from solid areas before deciding how to plot them.
   // `outlines` is retained for API compatibility (callers pass the element's
   // vector outlines); the fill itself no longer uses them. `alpha` is the
-  // anti-aliased coverage of the fill, for sub-pixel run endpoints.
-  function svgFillStrokes(mask, size, spacing, edgeGap = 0, connectMax = 4 * spacing, outlines, alpha = null) {
+  // anti-aliased coverage of the fill, for sub-pixel run endpoints, and
+  // `boundary` is the coverage value the mask was thresholded at (127
+  // for an SVG import, 32 for the canvas fill tool).
+  function svgFillStrokes(mask, size, spacing, edgeGap = 0, connectMax = 4 * spacing, outlines, alpha = null, boundary = 32) {
     const total = size * size;
     const depth = new Float32Array(total);
     const root2 = Math.SQRT2;
@@ -531,7 +537,7 @@
     // curved hole boundary the way a vector clip can. The element's
     // outer perimeter is drawn separately, from its exact vector outline
     // (see importSvg), never from this raster.
-    const solidStrokes = hatchStrokes(solid, size, spacing, edgeGap, connectMax, alpha);
+    const solidStrokes = hatchStrokes(solid, size, spacing, edgeGap, connectMax, alpha, boundary);
     const strokes = [...centerlines, ...solidStrokes];
     // The importer draws a filled shape's outer perimeter only when the
     // shape was actually hatched (solid area). Narrow ribbons reduce to

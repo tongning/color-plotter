@@ -328,7 +328,10 @@
           // Plot solid areas as connected fills and narrow traced ink as
           // centerlines. White is paper: never hatched.
           if (area > 0 && item.fill !== "#ffffff") {
-            const hatched = fillStrokes(mask, item.outlines, alpha);
+            // The mask is thresholded at 127, so the fill's sub-pixel
+            // boundary is 127 too — passing 32 would put the run
+            // endpoints ~0.4px past the true edge, outside the outline.
+            const hatched = fillStrokes(mask, item.outlines, alpha, 127);
             for (const path of hatched) {
               if (hasOccluder) for (const vis of clipAgainstMask(path, occluder)) addToOut(vis, item.fill);
               else addToOut(path, item.fill);
