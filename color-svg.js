@@ -315,17 +315,23 @@
           context.fillStyle = "#000"; context.fill(item.fillRule === "evenodd" ? "evenodd" : "nonzero");
           const data = context.getImageData(0, 0, SIZE, SIZE).data;
           mask = new Uint8Array(SIZE * SIZE);
+          // Keep the anti-aliased coverage alongside the binary mask: the
+          // raster hatch uses it for sub-pixel run endpoints, the same
+          // smoothed fill the canvas fill tool produces.
+          const alpha = new Uint8Array(SIZE * SIZE);
           for (let i = 0; i < mask.length; i++) {
             const inside = data[i * 4 + 3] > 127;
             mask[i] = inside ? 1 : 0;
+            alpha[i] = data[i * 4 + 3];
             if (inside) area++;
           }
           // Plot solid areas as connected fills and narrow traced ink as
-          // centerlines. The outlines are the vector fill boundaries, so
-          // pass them through for a vector hatch of the solid parts.
-          // White is paper: never hatched.
+          // centerlines. White is paper: never hatched.
           if (area > 0 && item.fill !== "#ffffff") {
-            const hatched = fillStrokes(mask, item.outlines);
+            // The mask is thresholded at 127, so the fill's sub-pixel
+            // boundary is 127 too — passing 32 would put the run
+            // endpoints ~0.4px past the true edge, outside the outline.
+            const hatched = fillStrokes(mask, item.outlines, alpha, 127);
             for (const path of hatched) {
               if (hasOccluder) for (const vis of clipAgainstMask(path, occluder)) addToOut(vis, item.fill);
               else addToOut(path, item.fill);

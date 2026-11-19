@@ -211,18 +211,43 @@ test('SVG solid rect vector-hatches from its outline', () => {
   }
 });
 
-test('SVG solid circle vector-hatches with a smooth edge', () => {
+test('SVG solid circle raster-hatches with a smooth edge', () => {
   const circ = [];
   for (let k = 0; k < 64; k++) {
     const a = k / 64 * 2 * Math.PI;
     circ.push({ x: 48 + 28 * Math.cos(a), y: 48 + 28 * Math.sin(a) });
   }
-  const mask = svgMask([circ]);
-  const strokes = svgFillStrokes(mask, size, spacing, edgeGap, connectMax, [outlineFrom([...circ, circ[0]])]);
-  assert.equal(strokes.length, 1);
+  // The import fills with the same raster hatch as the canvas fill tool
+  // (not the vector hatch): pass the anti-aliased coverage the real
+  // import gets from the canvas, so run endpoints get sub-pixel edges.
+  const inPoly = (px, py) => {
+    let c = false;
+    for (let i = 0, j = circ.length - 1; i < circ.length; j = i++) {
+      const xi = circ[i].x, yi = circ[i].y, xj = circ[j].x, yj = circ[j].y;
+      if (((yi > py) !== (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi)) c = !c;
+    }
+    return c;
+  };
+  const mask = new Uint8Array(size * size);
+  const alpha = new Uint8Array(size * size);
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+    let cov = 0;
+    for (let sy = 0; sy < 4; sy++) for (let sx = 0; sx < 4; sx++) {
+      if (inPoly(x + (sx + .5) / 4, y + (sy + .5) / 4)) cov++;
+    }
+    alpha[y * size + x] = Math.round(cov / 16 * 255);
+    mask[y * size + x] = alpha[y * size + x] > 127 ? 1 : 0;
+  }
+  // The mask is thresholded at 127, so the sub-pixel boundary is 127 too
+  // (the value an SVG import passes).
+  const strokes = svgFillStrokes(mask, size, spacing, edgeGap, connectMax,
+    [outlineFrom([...circ, circ[0]])], alpha, 127);
+  assert.ok(strokes.length >= 1);
   // The drawn stroke near the boundary hugs the true circle (radius 28).
-  // The raster hatch stair-steps up to ~0.7px off the edge on average;
-  // the vector edge stays well inside that.
+  // The raster hatch runs on pixel centres with sub-pixel endpoints and
+  // RDP-smoothed wall connectors, so it sits ~0.6px off the edge on
+  // average and ~1.5px at worst — well under the pen width, and the exact
+  // vector outline (drawn separately) defines the visible edge.
   let max = 0, sum = 0, n = 0;
   for (const st of strokes) for (const p of st) {
     const r = Math.hypot(p.x * size - 48, p.y * size - 48);
@@ -230,8 +255,8 @@ test('SVG solid circle vector-hatches with a smooth edge', () => {
     if (d < 3) { max = Math.max(max, d); sum += d; n++; }
   }
   assert.ok(n > 0, 'no boundary points found');
-  assert.ok(sum / n < 0.5, `mean edge deviation ${sum / n} px`);
-  assert.ok(max < 1.1, `worst edge deviation ${max} px`);
+  assert.ok(sum / n < 0.75, `mean edge deviation ${sum / n} px`);
+  assert.ok(max < 1.75, `worst edge deviation ${max} px`);
 });
 
 test('SVG donut keeps its hole empty', () => {
@@ -273,4 +298,21 @@ test('SVG without outlines falls back to the raster hatch', () => {
   const strokes = svgFillStrokes(mask, size, spacing, edgeGap, connectMax);
   assert.ok(strokes.length >= 1);
   for (const st of strokes) assert.equal(st.shape, true);
+});
+
+test('SVG band 5px and wider hatches instead of centre-lining', () => {
+  // The DC Metro bands are 5-7px wide in the 480 mask and were misread
+  // as traced ink lines (a single centreline, no fill). A 6px ribbon is
+  // a filled area: it hatches, with far more ink than its centreline.
+  const ribbon = [{ x: 8, y: 44 }, { x: 88, y: 44 }, { x: 88, y: 50 }, { x: 8, y: 50 }];
+  const strokes = svgFillStrokes(svgMask([ribbon]), size, spacing, edgeGap, connectMax,
+    [outlineFrom([...ribbon, ribbon[0]])]);
+  assert.equal(strokes.hasSolid, true);
+  assert.ok(length(strokes) > 120, `6px ribbon hatched only ${length(strokes)}px`);
+  // And a 4px ribbon is still a traced ink line: one centreline, no hatch.
+  const thin = [{ x: 8, y: 46 }, { x: 88, y: 46 }, { x: 88, y: 50 }, { x: 8, y: 50 }];
+  const thinStrokes = svgFillStrokes(svgMask([thin]), size, spacing, edgeGap, connectMax,
+    [outlineFrom([...thin, thin[0]])]);
+  assert.equal(thinStrokes.hasSolid, false);
+  assert.equal(thinStrokes.length, 1);
 });
