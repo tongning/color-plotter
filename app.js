@@ -2,6 +2,18 @@
 
 const PEN_DOWN = ["M280 P0 S168", "G4 P25"];
 const PEN_UP = ["M280 P0 S150", "G4 P25"];
+
+// The pen is 1.6mm wide, so a link shorter than this is invisible under the
+// pen's own width at the joints. Consecutive same-marker strokes closer
+// than this stay connected instead of lifting, travelling, and lowering.
+const CONNECT_MAX_MM = 1.0;
+
+// True when the pen can stay down between two strokes: it is already down,
+// and the next stroke starts within CONNECT_MAX_MM of where the pen is.
+// (The caller also requires the same marker; a tool change always lifts.)
+function canConnect(penIsDown, penPosition, nextStart) {
+  return penIsDown && !!penPosition && distance(penPosition, nextStart) <= CONNECT_MAX_MM;
+}
 const JOB_START = ["M280 P0 S150", "G4 P60", "G28 ; home axes with the pen lifted"];
 const JOB_END = ["T-1", "G28", "M84"];
 
@@ -658,6 +670,7 @@ function generateGcode() {
 
   let penPosition = null;
   let selectedTool = null;
+  let penIsDown = false;
   // The feedrate is modal: emit it only when it changes (travel <-> draw),
   // not on every line. Repeating F on every short segment bloats the job
   // and starves the planner, which is what makes curves sound choppy.
@@ -671,11 +684,12 @@ function generateGcode() {
   groupedStrokes.forEach((originalStroke, index) => {
     const tool = toolForStroke(originalStroke);
     if (tool !== selectedTool) {
-      penUp(lines);
+      if (penIsDown) penUp(lines);
       lines.push("M400 ; finish moves before changing marker", `T${tool} ; marker ${markerPalette[tool]}`);
       penUp(lines);
       selectedTool = tool;
       penPosition = null; // tool-change macros may move the carriage
+      penIsDown = false;
     }
     let stroke = plotReadyStroke(originalStroke);
     // Start each stroke at whichever end is nearer the pen, instead of always
@@ -688,9 +702,20 @@ function generateGcode() {
       if (toEnd < toStart) stroke = stroke.slice().reverse();
     }
     const first = plotPoint(stroke[0]);
-    lines.push(`; stroke ${index + 1}`);
-    lines.push(`G0 X${formatMm(first.x)} Y${formatMm(first.y)}${feedSuffix(travel)}`);
-    penDown(lines);
+    // When the next stroke starts very close to where the pen is, keep the
+    // pen down and draw a short link to it instead of lifting, travelling,
+    // and lowering. The link is sub-millimetre, so it hides under the pen's
+    // own width at the joints.
+    if (canConnect(penIsDown, penPosition, first)) {
+      lines.push(`; stroke ${index + 1} (connected)`);
+      lines.push(`G1 X${formatMm(first.x, 4)} Y${formatMm(first.y, 4)}${feedSuffix(draw)}`);
+    } else {
+      if (penIsDown) penUp(lines);
+      lines.push(`; stroke ${index + 1}`);
+      lines.push(`G0 X${formatMm(first.x)} Y${formatMm(first.y)}${feedSuffix(travel)}`);
+      penDown(lines);
+      penIsDown = true;
+    }
 
     // A tap still receives a short down/up sequence without a potentially zero move.
     // Curved runs go out as G2/G3 arcs (I/J = center offset from the
@@ -720,8 +745,10 @@ function generateGcode() {
       cur = move.to;
     }
     penPosition = mmPoints[mmPoints.length - 1];
-    penUp(lines);
+    // The pen stays down here; the next stroke decides whether to connect
+    // to it or lift, and the end of the job lifts it.
   });
+  if (penIsDown) penUp(lines);
 
   lines.push(...JOB_END, "; End of Small Plotter job");
   return `${lines.join("\n")}\n`;
