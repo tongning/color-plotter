@@ -5,7 +5,7 @@ const PEN_UP = ["M280 P0 S150", "G4 P25"];
 const JOB_START = ["M280 P0 S150", "G4 P60", "G28 ; home axes with the pen lifted"];
 const JOB_END = ["T-1", "G28", "M84"];
 
-const MARKER_PALETTE_KEY = "smallPlotter.markerPalette.v1";
+const MARKER_PALETTE_KEY = "smallPlotter.markerPalette.v2";
 let markerPalette = PlotterColor.DEFAULT_PALETTE.slice();
 try {
   const saved = JSON.parse(localStorage.getItem(MARKER_PALETTE_KEY));
