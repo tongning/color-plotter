@@ -42,6 +42,17 @@ test('generateGcode lifts before a tool change and at the end of the job', () =>
   // verify the structure is present in the source so a refactor cannot
   // silently drop the final lift or the tool-change lift.
   assert.ok(src.includes('if (penIsDown) penUp(lines);'), 'tool-change lift guarded by penIsDown');
-  assert.ok(src.includes('if (penIsDown) penUp(lines);\n\n  lines.push(...JOB_END'), 'final lift before JOB_END');
+  assert.ok(src.includes('if (penIsDown) penUp(lines);\n\n  // End of job:'), 'final lift before the end-of-job sequence');
   assert.ok(src.includes('if (canConnect(penIsDown, penPosition, first))'), 'stroke loop uses canConnect');
+});
+
+test('the end of the job parks top-left instead of homing', () => {
+  // No G28 after the tool is dropped: the job ends T-1, park, M84.
+  assert.ok(!src.includes('const JOB_END'), 'JOB_END constant is gone (the park move needs the bed height)');
+  assert.ok(src.includes('"T-1",'), 'job ends by dropping the tool');
+  assert.ok(src.includes('`G0 X0 Y${formatMm(height)} F${Math.round(travel)}`'), 'job parks at the top-left (X0, Y=height) at travel feed');
+  assert.ok(src.includes('"M84",'), 'job disables the motors after parking');
+  // The only G28 left is the homing at the start of the job.
+  const g28Count = (src.match(/G28/g) || []).length;
+  assert.equal(g28Count, 1, `expected exactly one G28 (job-start homing), found ${g28Count}`);
 });

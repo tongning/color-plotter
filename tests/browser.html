@@ -70,7 +70,8 @@ document.querySelector('#app').onload = async ({ target }) => {
     evaluate(`state.strokes = ['#e53935','#e53935','#3367d6','#ff0000'].map((color,i) => Object.assign([{x:.1,y:.1+i*.15},{x:.8,y:.1+i*.15}], {color,shape:true}));`);
     const originalStrokes = evaluate('JSON.stringify(serializeStrokes(state.strokes))');
     let gcode = w.generateGcode();
-    check(gcode.endsWith('T-1\nG28\nM84\n; End of Small Plotter job\n') && gcode.match(/^T-1$/gm)?.length === 1, 'Job unmounts the pen once, then homes and disables motors');
+    const jobEnd = evaluate('`T-1\\nG0 X0 Y${formatMm(dimensions().height)} F${Math.round(feeds().travel)}\\nM84\\n; End of Small Plotter job\\n`');
+    check(gcode.endsWith(jobEnd) && gcode.match(/^T-1$/gm)?.length === 1, 'Job unmounts the pen once, parks top-left, and disables motors (no homing at the end)');
     check(JSON.stringify(gcode.match(/^T\d+/gm)) === JSON.stringify(['T1','T6']), 'Interleaved colors sharing a marker plot in one pass per tool');
     const expectedTravels = evaluate('[0,1,3,2].map(i => { const p = plotPoint(state.strokes[i][0]); return `G0 X${formatMm(p.x)} Y${formatMm(p.y)} F${Math.round(feeds().travel)}`; })');
     check(JSON.stringify(gcode.match(/^G0 .*$/gm)) === JSON.stringify(expectedTravels), 'Grouping retains every path in its original order within each marker');
@@ -82,7 +83,7 @@ document.querySelector('#app').onload = async ({ target }) => {
     check(evaluate('eraseStrokeAt(state.strokes[0], {x:.4,y:.1}).every(piece => piece.color === "#e53935")'), 'Eraser fragments retain color');
     evaluate('state.strokes = [[{x:0,y:0},{x:1,y:1}]]');
     check(/^T0\b/m.test(w.generateGcode()), 'Legacy monochrome drawings use T0');
-    check(w.generateGcode().endsWith('T-1\nG28\nM84\n; End of Small Plotter job\n'), 'Monochrome jobs also unmount before homing and disabling motors');
+    check(w.generateGcode().endsWith(jobEnd), 'Monochrome jobs also unmount, park top-left, and disable motors');
     w.document.querySelector('[data-marker="6"]').click();
     check(w.document.querySelector('#activeMarkerLabel').textContent === 'Drawing with T6', 'Marker selection updates the UI');
     const premade = w.parsePremadeGcode('T1\nG0 X0 Y0\nG1 X10 Y10\nT6\nG0 X10 Y0\nG1 X0 Y10');

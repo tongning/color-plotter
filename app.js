@@ -15,7 +15,10 @@ function canConnect(penIsDown, penPosition, nextStart) {
   return penIsDown && !!penPosition && distance(penPosition, nextStart) <= CONNECT_MAX_MM;
 }
 const JOB_START = ["M280 P0 S150", "G4 P60", "G28 ; home axes with the pen lifted"];
-const JOB_END = ["T-1", "G28", "M84"];
+// The end of the job is built in generateGcode (it needs the bed height for
+// the park move), not a constant: drop the tool, park top-left quickly, then
+// disable the motors. No homing at the end — the start of the job already
+// homed, and parking is faster than re-homing.
 
 const MARKER_PALETTE_KEY = "smallPlotter.markerPalette.v2";
 let markerPalette = PlotterColor.DEFAULT_PALETTE.slice();
@@ -750,7 +753,15 @@ function generateGcode() {
   });
   if (penIsDown) penUp(lines);
 
-  lines.push(...JOB_END, "; End of Small Plotter job");
+  // End of job: drop the tool, park at the top-left corner quickly, then
+  // disable the motors. No homing here — the start of the job already
+  // homed, and parking is faster than re-homing.
+  lines.push(
+    "T-1",
+    `G0 X0 Y${formatMm(height)} F${Math.round(travel)}`,
+    "M84",
+    "; End of Small Plotter job"
+  );
   return `${lines.join("\n")}\n`;
 }
 
