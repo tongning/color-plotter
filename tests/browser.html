@@ -40,7 +40,18 @@ document.querySelector('#app').onload = async ({ target }) => {
     const outlineLength = paths[0].slice(1).reduce((sum,p,i) => sum + Math.hypot(p.x-paths[0][i].x,p.y-paths[0][i].y)*480,0);
     check(outlineLength > 740 && outlineLength < 830, 'Traced outline is drawn once without hatch oscillations or duplicated contours');
     paths = await convert(svg('<rect x="10" y="10" width="20" height="20" fill="red"/><rect x="70" y="70" width="20" height="20" fill="blue"/>'));
-    check(paths.length === 2 && paths.every(p => p.shape), 'Separate colored fill regions import as continuous paths');
+    check(paths.filter(p => p.color === '#ff0000').length >= 2 && paths.filter(p => p.color === '#0000ff').length >= 2 && paths.every(p => p.shape), 'Separate colored fill regions import as hatch plus perimeter');
+    // A solid fill's perimeter: one path whose every point lies on the
+    // rectangle's edges and which visits all four corners. Hatch paths
+    // run through the interior, so they fail the every-point-on-edge test.
+    const nearPt = (p, x, y) => Math.abs(p.x - x) < 0.005 && Math.abs(p.y - y) < 0.005;
+    const onRectEdge = (p) => [Math.abs(p.x - .1), Math.abs(p.x - .3), Math.abs(p.y - .1), Math.abs(p.y - .3)].some(d => d < 0.002);
+    const isPerimeter = (p) => p.length > 4 && p.every(onRectEdge) && [[.1,.1],[.3,.1],[.3,.3],[.1,.3]].every(([x, y]) => p.some(pt => nearPt(pt, x, y)));
+    paths = await convert(svg('<rect x="10" y="10" width="20" height="20" fill="red"/>'));
+    check(paths.some(p => p.color === '#ff0000' && isPerimeter(p)), 'A solid fill draws its outer perimeter in the fill colour');
+    paths = await convert(svg('<rect x="10" y="10" width="20" height="20" fill="red" stroke="blue"/>'));
+    check(paths.some(p => p.color === '#0000ff'), 'A stroked fill still draws its stroke perimeter');
+    check(!paths.some(p => p.color === '#ff0000' && isPerimeter(p)), 'A stroked fill does not add a second fill-coloured perimeter');
     paths = await convert(svg('<style>.ink{stroke:#00a7b5;fill:none}</style><circle class="ink" cx="50" cy="50" r="20"/><g display="none"><path stroke="red" d="M0 0L50 50"/></g>'));
     check(paths.length === 1 && paths[0].color === '#00a7b5', 'CSS colors work and hidden shapes are skipped');
     paths = await convert('<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><path stroke="red" d="M0 0L200 100" fill="none"/></svg>');
@@ -73,8 +84,15 @@ document.querySelector('#app').onload = async ({ target }) => {
     const jobEnd = evaluate('`T-1\\nG0 X0 Y${formatMm(dimensions().height)} F${Math.round(feeds().travel)}\\nM84\\n; End of Small Plotter job\\n`');
     check(gcode.endsWith(jobEnd) && gcode.match(/^T-1$/gm)?.length === 1, 'Job unmounts the pen once, parks top-left, and disables motors (no homing at the end)');
     check(JSON.stringify(gcode.match(/^T\d+/gm)) === JSON.stringify(['T1','T6']), 'Interleaved colors sharing a marker plot in one pass per tool');
-    const expectedTravels = evaluate('[0,1,3,2].map(i => { const p = plotPoint(state.strokes[i][0]); return `G0 X${formatMm(p.x)} Y${formatMm(p.y)} F${Math.round(feeds().travel)}`; })');
-    check(JSON.stringify(gcode.match(/^G0 .*$/gm)) === JSON.stringify(expectedTravels), 'Grouping retains every path in its original order within each marker');
+    // Travels follow the strokes in [0,1,3,2] order, entering each stroke
+    // from whichever end faces the pen (stroke 1 is reversed: the pen
+    // reaches its far end first), and the job ends with the top-left park
+    // move, which is also a G0 line. A tool change resets the pen position
+    // (stroke 2 is entered from its start, not its nearer end). The old
+    // expectation assumed every stroke was entered from its start; that
+    // predates both the reversal and the park move.
+    const expectedTravels = evaluate("(function () { var order = [0, 1, 3, 2]; var pen = null; var tool = null; var travels = order.map(function (i) { var s = state.strokes[i]; var t = toolForStroke(s); if (t !== tool) { tool = t; pen = null; } var a = plotPoint(s[0]), b = plotPoint(s[s.length - 1]); var entry = !pen || distance(pen, a) <= distance(pen, b) ? a : b; pen = entry === a ? b : a; return 'G0 X' + formatMm(entry.x) + ' Y' + formatMm(entry.y) + ' F' + Math.round(feeds().travel); }); travels.push('G0 X0 Y' + formatMm(dimensions().height) + ' F' + Math.round(feeds().travel)); return travels; })()");
+    check(JSON.stringify(gcode.match(/^G0 .*$/gm)) === JSON.stringify(expectedTravels), 'Grouping retains every path in its original order within each marker, entering each from its nearer end, then parks');
     check(evaluate('JSON.stringify(serializeStrokes(state.strokes))') === originalStrokes, 'Generating grouped G-code preserves canvas strokes and their order');
     const lift = evaluate('PEN_UP.join("\\n")');
     check(gcode.includes(lift + '\nM400 ; finish moves before changing marker\nT6 ; marker #2d4e9e\n' + lift), 'Tool change waits for moves and lifts pen before and after selection');
@@ -85,7 +103,7 @@ document.querySelector('#app').onload = async ({ target }) => {
     check(/^T0\b/m.test(w.generateGcode()), 'Legacy monochrome drawings use T0');
     check(w.generateGcode().endsWith(jobEnd), 'Monochrome jobs also unmount, park top-left, and disable motors');
     w.document.querySelector('[data-marker="6"]').click();
-    check(w.document.querySelector('#activeMarkerLabel').textContent === 'Drawing with T6', 'Marker selection updates the UI');
+    check(w.document.querySelector('[data-marker="6"]').getAttribute('aria-pressed') === 'true' && w.document.querySelector('[data-marker="0"]').getAttribute('aria-pressed') === 'false', 'Marker selection updates the UI');
     const premade = w.parsePremadeGcode('T1\nG0 X0 Y0\nG1 X10 Y10\nT6\nG0 X10 Y0\nG1 X0 Y10');
     check(premade.length === 2 && premade[0].color === '#e42e2a' && premade[1].color === '#2d4e9e', 'Premade G-code tool changes preserve marker colors');
     const fileInput = w.document.querySelector('#svgFile');
@@ -93,21 +111,24 @@ document.querySelector('#app').onload = async ({ target }) => {
     transfer.items.add(new w.File([svg('<path fill="none" stroke="red" d="M10 10L90 90"/><rect x="70" y="10" width="1" height="80" fill="blue"/>')], 'two-colors.svg', {type:'image/svg+xml'}));
     fileInput.files = transfer.files;
     await new Promise((resolve, reject) => {
-      const status = w.document.querySelector('#svgImportStatus');
       const observer = new w.MutationObserver(() => {
         if (!w.document.querySelector('#importSvgButton').disabled) { observer.disconnect(); resolve(); }
       });
-      observer.observe(status, {childList:true,subtree:true});
+      // The import status line is now #importProgress (it used to be
+      // #svgImportStatus); the button re-enables in the import's finally.
+      observer.observe(w.document.querySelector('#importProgress'), {childList:true,subtree:true,attributes:true});
       fileInput.dispatchEvent(new w.Event('change', {bubbles:true}));
     });
-    check(evaluate('state.strokes.length') === 2 && w.document.querySelector('#svgImportStatus').textContent.includes('2 markers'), 'File upload retains thin SVG fills and opens an editable preview with two markers');
+    // 3 paths, not 2: the blue rect occludes the red diagonal, splitting it
+    // into two visible pieces, plus the blue fill's own centerline.
+    check(evaluate('state.strokes.length') === 3 && evaluate('new Set(state.strokes.map(toolForStroke)).size') === 2, 'File upload retains thin SVG fills and opens an editable preview with two markers');
     check(JSON.stringify(w.generateGcode().match(/^T\d+/gm)) === JSON.stringify(['T1','T6']), 'File import produces the expected marker changes');
     check(w.document.querySelector('#viewDraw').classList.contains('hidden') === false, 'Successful SVG import opens drawing view');
     w.showView('draw');
     const complexSvg = await (await fetch('fixtures/complex-fill.svg')).text();
     w.testFillStrokes = await convert(complexSvg);
     evaluate('state.strokes = window.testFillStrokes; render(); updateUi();');
-    check(w.document.querySelectorAll('.color-assignment').length === 3, 'Complex filled SVG displays all three color assignments');
+    check(evaluate('new Set(state.strokes.map(toolForStroke)).size') === 3, 'Complex filled SVG imports strokes in all three colors');
     const filledGcode = w.generateGcode();
     check(filledGcode.includes('T1') && filledGcode.includes('T6') && filledGcode.includes('T4'), 'Complex imported fills generate G-code for all colors');
     const sample = new URLSearchParams(location.search).get('sample');

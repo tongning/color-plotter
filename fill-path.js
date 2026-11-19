@@ -529,7 +529,13 @@
       }
     }
     if (!solidStrokes.length) solidStrokes = hatchStrokes(solid, size, spacing, edgeGap, connectMax);
-    return [...centerlines, ...solidStrokes];
+    const strokes = [...centerlines, ...solidStrokes];
+    // The importer draws a filled shape's outer perimeter only when the
+    // shape was actually hatched (solid area). Narrow ribbons reduce to
+    // a centerline that already is their form; an extra perimeter there
+    // would just double the ink. Callers read this off the array.
+    strokes.hasSolid = solidStrokes.length > 0;
+    return strokes;
   }
 
   function centerlineStrokes(mask, size) {
