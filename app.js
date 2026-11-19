@@ -3,10 +3,16 @@
 const PEN_DOWN = ["M280 P0 S168", "G4 P25"];
 const PEN_UP = ["M280 P0 S150", "G4 P25"];
 
-// The pen is 1.6mm wide, so a link shorter than this is invisible under the
-// pen's own width at the joints. Consecutive same-marker strokes closer
-// than this stay connected instead of lifting, travelling, and lowering.
-const CONNECT_MAX_MM = 1.0;
+// The pen is 1.6mm wide, so a link up to about this long reads as the two
+// strokes touching — the link itself is a pen-width line, and it joins
+// strokes that are already a pen-width apart. Consecutive same-marker
+// strokes closer than this stay connected instead of lifting, travelling,
+// and lowering. 1.0mm was too precise: measured on real photo-mode output,
+// adjacent hatch lines sit a median 1.85mm apart at their ends, so only
+// 8% of them connected and the pen lifted between nearly every line.
+// At 2.0mm, 57% of hatch gaps connect and flow streamlines (median gap
+// ~5mm, genuinely separate lines) still correctly lift.
+const CONNECT_MAX_MM = 2.0;
 
 // True when the pen can stay down between two strokes: it is already down,
 // and the next stroke starts within CONNECT_MAX_MM of where the pen is.
