@@ -32,12 +32,11 @@ test('pen stays down only when it is already down and the next start is close', 
   assert.equal(canConnect(true, pen, { x: 50, y: 50 }), false, 'far away lifts');
 });
 
-test('the connect threshold is about a pen width, no more', () => {
-  // The pen is 1.6mm wide; a link up to ~2mm still reads as the strokes
-  // touching. Longer than that it starts bridging real white space.
-  // (Was 1.0mm; measured hatch gaps sit at a median 1.85mm, so 1.0mm
-  // connected only 8% of them and the pen lifted between nearly every line.)
-  assert.ok(CONNECT_MAX_MM > 0 && CONNECT_MAX_MM <= 2.0, `CONNECT_MAX_MM is ${CONNECT_MAX_MM}`);
+test('the connect threshold is sub-millimetre-scale, under the pen width', () => {
+  // The pen is 1.6mm wide, so the link must hide under it. 2.0mm was
+  // tried and backed out — links that long show as stray lines — so the
+  // threshold sits at 0.75mm: only strokes that genuinely touch connect.
+  assert.ok(CONNECT_MAX_MM > 0 && CONNECT_MAX_MM < 1.6, `CONNECT_MAX_MM is ${CONNECT_MAX_MM}`);
 });
 
 test('generateGcode lifts before a tool change and at the end of the job', () => {
