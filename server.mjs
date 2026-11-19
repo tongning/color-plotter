@@ -12,7 +12,6 @@ const STORE_TEMP = join(DATA_DIR, "drawings.tmp.json");
 const PORT = Number(process.env.PORT) || 8080;
 const HOST = process.env.HOST || "127.0.0.1";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "meowl";
-const MAX_DRAWINGS = 500;
 
 const MIME_TYPES = {
   ".css": "text/css; charset=utf-8",
@@ -173,7 +172,6 @@ async function handleApi(request, response, url) {
   if (request.method === "POST" && url.pathname === "/api/drawings") {
     const drawing = cleanDrawing(await readJson(request));
     const saved = await updateStore((store) => {
-      if (store.drawings.length >= MAX_DRAWINGS) throw httpError(507, "The public gallery is full.");
       if (store.drawings.some((item) => item.id === drawing.id)) throw httpError(409, "That drawing is already public.");
       const record = { ...drawing, createdAt: new Date().toISOString(), prints: 0 };
       store.drawings.push(record);
