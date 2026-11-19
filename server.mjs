@@ -12,10 +12,7 @@ const STORE_TEMP = join(DATA_DIR, "drawings.tmp.json");
 const PORT = Number(process.env.PORT) || 8080;
 const HOST = process.env.HOST || "127.0.0.1";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "meowl";
-const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const MAX_DRAWINGS = 500;
-const MAX_STROKES = 500;
-const MAX_POINTS = 50000;
 
 const MIME_TYPES = {
   ".css": "text/css; charset=utf-8",
@@ -77,10 +74,7 @@ function sendJson(response, status, value) {
 
 async function readJson(request) {
   const chunks = [];
-  let size = 0;
   for await (const chunk of request) {
-    size += chunk.length;
-    if (size > MAX_BODY_BYTES) throw httpError(413, "Drawing is too large to save.");
     chunks.push(chunk);
   }
   try { return JSON.parse(Buffer.concat(chunks).toString("utf8")); }
@@ -96,12 +90,8 @@ function cleanText(value, label) {
 
 function cleanDrawing(input) {
   if (!Array.isArray(input.strokes) || input.strokes.length === 0) throw httpError(400, "Drawing has no strokes.");
-  if (input.strokes.length > MAX_STROKES) throw httpError(400, "Drawing has too many strokes.");
-  let pointCount = 0;
   const strokes = input.strokes.map((stroke) => {
     if (!stroke || !Array.isArray(stroke.points) || stroke.points.length === 0) throw httpError(400, "Drawing contains an invalid stroke.");
-    pointCount += stroke.points.length;
-    if (pointCount > MAX_POINTS) throw httpError(400, "Drawing has too many points.");
     return {
       points: stroke.points.map((point) => {
         const x = Number(point?.x);
