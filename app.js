@@ -591,6 +591,43 @@ function plotReadyStroke(stroke) {
   return stroke.squiggle || stroke.shape ? simplifyStroke(stroke, 0.0004) : smoothStroke(stroke);
 }
 
+// Order strokes greedily by proximity so travel moves stay short: starting
+// from the first stroke in the group's original order (the pen position is
+// unknown after a tool change), repeatedly take the remaining stroke whose
+// start or end is closest to the pen. Returns a new array; the input and
+// its strokes are not modified. Reversal is left to the caller, which
+// reverses a stroke when its end faces the pen; this function assumes the
+// stroke is drawn from its nearer end, so the pen ends at the far end.
+function orderByNearestNeighbour(strokes) {
+  if (strokes.length <= 1) return strokes.slice();
+  const remaining = strokes.map((stroke) => ({
+    stroke,
+    start: plotPoint(stroke[0]),
+    end: plotPoint(stroke[stroke.length - 1]),
+  }));
+  const ordered = [];
+  // First stroke: no known pen position, keep the group's original order.
+  let current = remaining.shift();
+  ordered.push(current.stroke);
+  let pen = current.end;
+  while (remaining.length) {
+    let bestIndex = 0;
+    let bestDistance = Infinity;
+    for (let i = 0; i < remaining.length; i++) {
+      const toStart = distance(pen, remaining[i].start);
+      if (toStart < bestDistance) { bestDistance = toStart; bestIndex = i; }
+      const toEnd = distance(pen, remaining[i].end);
+      if (toEnd < bestDistance) { bestDistance = toEnd; bestIndex = i; }
+    }
+    current = remaining.splice(bestIndex, 1)[0];
+    ordered.push(current.stroke);
+    // The caller draws from the nearer end, so the pen ends at the far end.
+    // (On a tie the caller draws from the start, matching the <= here.)
+    pen = distance(pen, current.start) <= distance(pen, current.end) ? current.end : current.start;
+  }
+  return ordered;
+}
+
 function generateGcode() {
   const { width, height } = dimensions();
   const { draw, travel } = feeds();
@@ -613,7 +650,11 @@ function generateGcode() {
     if (!toolGroups.has(tool)) toolGroups.set(tool, []);
     toolGroups.get(tool).push(stroke);
   }
-  const groupedStrokes = Array.from(toolGroups.values()).flat();
+  // Within each tool group, order strokes by proximity so the pen travels
+  // to the nearest remaining stroke instead of jumping across the bed in
+  // import order. Tool grouping still comes first: a marker change costs
+  // far more than any travel move.
+  const groupedStrokes = Array.from(toolGroups.values(), (group) => orderByNearestNeighbour(group)).flat();
 
   let penPosition = null;
   let selectedTool = null;
@@ -637,9 +678,11 @@ function generateGcode() {
       penPosition = null; // tool-change macros may move the carriage
     }
     let stroke = plotReadyStroke(originalStroke);
-    // Squiggle lines plot serpentine-style: start each line at whichever end
-    // is nearer the pen, instead of always travelling back to the same edge.
-    if (originalStroke.squiggle && penPosition && stroke.length > 1) {
+    // Start each stroke at whichever end is nearer the pen, instead of always
+    // travelling back to the same edge. Squiggle lines already did this
+    // (serpentine-style); now every stroke does, which is what makes the
+    // nearest-neighbour ordering above pay off.
+    if (penPosition && stroke.length > 1) {
       const toStart = distance(penPosition, plotPoint(stroke[0]));
       const toEnd = distance(penPosition, plotPoint(stroke[stroke.length - 1]));
       if (toEnd < toStart) stroke = stroke.slice().reverse();
