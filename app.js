@@ -1805,6 +1805,7 @@ function squiggleStrokes(image) {
 function setSquiggleSource(image) {
   state.sourceImage = image;
   squigglePanel.classList.toggle("hidden", !image);
+  if (image) $("#photoPanel").classList.add("hidden");
   $("#retakeButton").classList.toggle("hidden", !(image && state.squigglePreset === "selfie"));
 }
 
@@ -2968,41 +2969,100 @@ updateMarkerSelection();
 for (const selector of ["#goSvg", "#importSvgButton"]) {
   $(selector).addEventListener("click", () => $("#svgFile").click());
 }
+// Shared by SVG file import and photo-to-sketch conversion: load SVG text
+// through the same import path (colour matching, bed fit, undo snapshot).
+async function importSvgText(text, name) {
+  const { width: bedWidth, height: bedHeight } = dimensions();
+  const importProgress = $("#importProgress");
+  // importSvg yields between chunks, so this stays live on big files
+  // instead of freezing the tab until the whole import lands.
+  const onProgress = (done, total, label) => {
+    importProgress.textContent = total > 0 ? `${label}… ${Math.round((done / total) * 100)}%` : `${label}…`;
+    importProgress.classList.remove("hidden");
+  };
+  const strokes = PlotterColor.fitToBed(await PlotterColor.importSvg(text, svgFillStrokes, onProgress), bedWidth, bedHeight);
+  // Replace the current artwork only after the complete import succeeds.
+  snapshot();
+  setSquiggleSource(null);
+  clearGalleryDrawing();
+  state.premadeSource = name;
+  state.strokes = strokes;
+  state.activeStroke = null;
+  setDrawingTool("pencil");
+  showView("draw");
+  render(); updateUi();
+  const tools = new Set(strokes.map(toolForStroke));
+  showToast(`Imported ${name} — ${strokes.length} paths, ${tools.size} markers`);
+  // NOTE: this does not hide #importProgress. The caller hides it last,
+  // after re-enabling its own buttons, so the progress line's final
+  // mutation happens with the buttons already restored (the browser
+  // checks wait on exactly that ordering).
+}
+
 $("#svgFile").addEventListener("change", async (event) => {
   const file = event.target.files[0];
   if (!file) return;
   $("#importSvgButton").disabled = true;
   $("#goSvg").disabled = true;
-  const importProgress = $("#importProgress");
   try {
-    const { width: bedWidth, height: bedHeight } = dimensions();
-    // importSvg yields between chunks, so this stays live on big files
-    // instead of freezing the tab until the whole import lands.
-    const onProgress = (done, total, label) => {
-      importProgress.textContent = total > 0 ? `${label}… ${Math.round((done / total) * 100)}%` : `${label}…`;
-      importProgress.classList.remove("hidden");
-    };
-    const strokes = PlotterColor.fitToBed(await PlotterColor.importSvg(await file.text(), svgFillStrokes, onProgress), bedWidth, bedHeight);
-    importProgress.classList.add("hidden");
-    // Replace the current artwork only after the complete import succeeds.
-    snapshot();
-    setSquiggleSource(null);
-    clearGalleryDrawing();
-    state.premadeSource = file.name;
-    state.strokes = strokes;
-    state.activeStroke = null;
-    setDrawingTool("pencil");
-    showView("draw");
-    render(); updateUi();
-    const tools = new Set(strokes.map(toolForStroke));
-    showToast(`Imported ${file.name} — ${strokes.length} paths, ${tools.size} markers`);
+    await importSvgText(await file.text(), file.name);
   } catch (error) {
     showToast(error.message || "Could not import this SVG.", "error");
   } finally {
-    importProgress.classList.add("hidden");
     event.target.value = "";
     $("#importSvgButton").disabled = false;
     $("#goSvg").disabled = false;
+    $("#importProgress").classList.add("hidden");
+  }
+});
+
+/* ---------- photo to sketch ---------- */
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error("Could not read the photo."));
+    reader.readAsDataURL(file);
+  });
+}
+
+$("#goPhoto").addEventListener("click", () => {
+  $("#photoPanel").classList.remove("hidden");
+  squigglePanel.classList.add("hidden");
+  showView("draw");
+});
+
+$("#photoConvert").addEventListener("click", async () => {
+  const file = $("#photoFile").files[0];
+  if (!file) { showToast("Choose a photo first.", "error"); return; }
+  const button = $("#photoConvert");
+  button.disabled = true;
+  const importProgress = $("#importProgress");
+  try {
+    importProgress.textContent = "Converting photo…";
+    importProgress.classList.remove("hidden");
+    const image = await readFileAsDataUrl(file);
+    const response = await fetch("/api/photo-sketch", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        image,
+        detail: $("#photoDetail").checked,
+        dramatic: $("#photoDramatic").checked,
+        shading: $("#photoShading").value,
+        density: Number($("#photoDensity").value),
+      }),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || "Photo conversion failed.");
+    if (typeof result.svg !== "string" || !result.svg.includes("<svg")) throw new Error("Photo conversion returned no sketch.");
+    await importSvgText(result.svg, `${file.name.replace(/\.[^.]+$/, "")} sketch`);
+  } catch (error) {
+    showToast(error.message || "Could not convert this photo.", "error");
+  } finally {
+    button.disabled = false;
+    importProgress.classList.add("hidden");
   }
 });
 

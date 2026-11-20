@@ -114,6 +114,7 @@
         <div class="splash-buttons">
           <button class="splash-btn" id="goDraw" type="button"><span class="splash-emoji">✏️</span> Draw a picture</button>
           <button class="splash-btn" id="goSvg" type="button"><span class="splash-emoji">🎨</span> Import a color SVG</button>
+          <button class="splash-btn" id="goPhoto" type="button"><span class="splash-emoji">📷</span> Photo to sketch</button>
           <button class="splash-btn" id="goSelfie" type="button"><span class="splash-emoji">🤳</span> Take a selfie</button>
           <button class="splash-btn" id="goPremade" type="button"><span class="splash-emoji">🖼️</span> Pick a premade picture</button>
         </div>
@@ -142,6 +143,40 @@
             <span>Remove background</span>
           </label>
           <div class="sq-reset-row"><button id="sqReset" type="button">↺ Reset settings</button></div>
+        </div>
+
+        <div class="photo-panel hidden" id="photoPanel">
+          <label class="photo-file-label" for="photoFile">Photo</label>
+          <input id="photoFile" type="file" accept="image/*" aria-label="Choose a photo to sketch" />
+          <label class="toggle-row" for="photoDetail">
+            <input id="photoDetail" type="checkbox" />
+            <span class="toggle-ui" aria-hidden="true"></span>
+            <span>More detail</span>
+          </label>
+          <label class="toggle-row" for="photoDramatic">
+            <input id="photoDramatic" type="checkbox" />
+            <span class="toggle-ui" aria-hidden="true"></span>
+            <span>Dramatic shading</span>
+          </label>
+          <label class="photo-shading-label" for="photoShading">Shading
+            <select id="photoShading" class="mod-select">
+              <option value="off" selected>Off</option>
+              <option value="gradient">Gradient fill</option>
+              <option value="cross">Cross-hatch</option>
+              <option value="hybrid">Hybrid (gradient + flow)</option>
+              <option value="plotcaster">Plotcaster flow</option>
+              <option value="squiggle">Wave squiggle</option>
+            </select>
+          </label>
+          <label class="photo-shading-label" for="photoDensity">Density
+            <select id="photoDensity" class="mod-select">
+              <option value="1" selected>Normal</option>
+              <option value="1.5">Dense</option>
+              <option value="2">Very dense</option>
+              <option value="3">Max (near-full page)</option>
+            </select>
+          </label>
+          <div class="sq-reset-row"><button id="photoConvert" type="button">Convert</button></div>
         </div>
 
         <div class="saved-drawing-banner hidden" id="savedDrawingBanner">

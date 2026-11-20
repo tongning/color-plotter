@@ -175,6 +175,26 @@ button.ghost:hover { background: #e8ebf2; }
 .mod-select { min-width: 0; width: 100%; font: inherit; font-size: 12px; color: var(--ink); padding: 3px 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); cursor: pointer; }
 .sq-reset-row { grid-column: 1 / -1; display: flex; justify-content: center; margin-top: 6px; }
 .sq-reset-row button { font-size: 12px; padding: 5px 12px; color: var(--muted); }
+
+/* ---------- photo to sketch ---------- */
+
+.photo-panel {
+  width: min(92vw, 720px);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 22px;
+  padding: 12px 16px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 2px 10px rgba(20, 20, 60, 0.06);
+  color: var(--muted);
+  font-size: 12px;
+}
+.photo-panel .toggle-row { margin: 0 !important; }
+.photo-panel input[type="file"] { min-width: 0; }
+.photo-panel .mod-select { width: auto; }
+.photo-file-label, .photo-shading-label { display: flex; align-items: center; gap: 8px; }
 .plotting-bed.readonly { cursor: default; }
 
 /* ---------- selfie ---------- */
@@ -362,6 +382,7 @@ button.ghost:hover { background: #e8ebf2; }
   .stage { padding-top: 24px; }
   button.big { font-size: 18px; padding: 11px 22px; }
   .squiggle-panel { grid-template-columns: 1fr; }
+  .photo-panel { grid-template-columns: 1fr; }
   .gallery-heading { align-items: start; flex-direction: column; }
   .saved-gallery { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
   .saved-drawing-banner { align-items: start; flex-direction: column; }
