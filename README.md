@@ -2,7 +2,7 @@
 
 A drawing app, color SVG converter, and public artwork gallery for an eight-marker pen plotter running RepRapFirmware / Duet Web Control.
 
-The canvas supports freehand pencil strokes, straight lines, rectangles, ellipses, hatched fills, and a drag eraser with undo and redo. Import color SVGs with automatic marker matching, or turn a webcam selfie into adjustable squiggle art. Optional selfie background removal runs locally with the bundled TensorFlow.js model.
+The canvas supports freehand pencil strokes, straight lines, rectangles, ellipses, hatched fills, and a drag eraser with undo and redo. Import color SVGs with automatic marker matching, turn a photo into a colour pen sketch, or turn a webcam selfie into adjustable squiggle art. Optional selfie background removal runs locally with the bundled TensorFlow.js model.
 
 Built-in pictures are discovered from every unique `.gcode` basename in `assets/`. A matching `.png` or `.jpg` file is used as its card preview (`.jpeg` is also supported for existing assets); the app then generates the usual bed-sized, pen-controlled Duet job.
 
@@ -34,7 +34,7 @@ M280 P0 S150
 G4 P25
 ```
 
-Every job uses absolute positioning, lifts the pen and homes before drawing, then unmounts the pen with `T-1`, homes, and disables the motors:
+Every job uses absolute positioning, lifts the pen and homes before drawing, then unmounts the pen with `T-1`, parks at the top-left corner, and disables the motors:
 
 ```gcode
 G90
@@ -43,7 +43,7 @@ G4 P60
 G28
 ...
 T-1
-G28
+G0 X0 Y… F…
 M84
 ```
 
@@ -65,6 +65,23 @@ The importer supports paths (including curves and separate subpaths), rectangles
 
 Convert text and symbols to paths before importing. Gradients, patterns, embedded images, clipping, masks, filters, dashed strokes and arrow markers are rejected with an explanatory message. SVG uploads and public gallery saves have no size, stroke, or point limits; large drawings are imported and saved as-is. Scripts and event handlers are stripped, and SVG processing is isolated from the app with external resources blocked.
 
-Jobs lift the pen, wait for queued moves with `M400`, select the required marker using `T0`–`T7`, then lift the pen again before traveling to the next path. All paths assigned to the same marker share one tool selection, even when their source SVG colors differ. Each used marker is selected once per job. Grouping happens when G-code is generated for preview, download or upload; it does not reorder the editable canvas strokes or undo history. The final machine commands are exactly `T-1`, `G28`, and `M84`; the previous servo park commands are no longer emitted. Pen-servo commands still lift and lower the pen during drawing; the Duet must have the corresponding tools and tool-change macros configured. Monochrome drawings without stored color use `T0` and end with the same unmount/home/motors-off sequence. Colors survive gallery saves, remixes, undo and erasing.
+Jobs lift the pen, wait for queued moves with `M400`, select the required marker using `T0`–`T7`, then lift the pen again before traveling to the next path. All paths assigned to the same marker share one tool selection, even when their source SVG colors differ. Each used marker is selected once per job. Grouping happens when G-code is generated for preview, download or upload; it does not reorder the editable canvas strokes or undo history. The final machine commands are `T-1`, a fast move to the top-left corner (`G0 X0 Y<height>`), and `M84`. There is no homing at the end of the job — the start already homed, and parking is faster than re-homing. Pen-servo commands still lift and lower the pen during drawing; the Duet must have the corresponding tools and tool-change macros configured. Monochrome drawings without stored color use `T0` and end with the same unmount/home/motors-off sequence. Colors survive gallery saves, remixes, undo and erasing.
+
+## Photo to sketch
+
+The **📷 Photo to sketch** panel in the draw view turns a reference photo into a colour pen sketch. It needs the Python converter on the machine running the server: `photo_to_plot_v3.py` with OpenCV (`cv2`), configured with `PHOTO_SKETCH_PYTHON` and `PHOTO_SKETCH_SCRIPT` (the defaults point at the author's local checkout, `/home/hatch/workspace/art/venv-sketch/bin/python` and `/home/hatch/workspace/art/photo_to_plot_v3.py`). Without it the endpoint answers 503 and the panel reports that the converter is missing.
+
+The photo is converted server-side (`POST /api/photo-sketch`, JPEG/PNG data URL, 15 MB body limit, 60 s timeout, temp files under `.data/tmp/`) and the resulting stroke-only SVG is loaded through the normal SVG import, so the same marker matching, preview, and G-code generation apply. Photos are fitted to a 118 × 140 mm portrait area — set **Drawing area** to 118 × 140 for photo sketches (the app default is 118 × 118).
+
+Shading modes (the **Shading** select):
+
+- **Off** — flow-field streamlines that follow the image's forms; the default tone engine.
+- **Gradient fill** — parallel variable-spacing hatch; darker areas pack tighter.
+- **Cross-hatch** — gradient hatch plus a +90° layer in the darkest areas.
+- **Hybrid (gradient + flow)** — a sparse gradient underlayer with flow on top.
+- **Plotcaster flow** — long, evenly spaced streamlines over a structure-tensor field; few pen lifts, fast plots.
+- **Wave squiggle** — horizontal sine-wave scanlines whose amplitude and frequency follow darkness; no contour lines in this mode.
+
+Colours are quantised to the eight loaded markers (default palette: BIC Cristal Xtra Bold 1.6 mm — black, red, pink, sky blue, lime, turquoise, blue, violet) by OKLab distance, the same matching as SVG import. **More detail** adds finer structure lines, **Dramatic shading** darkens the mids and cross-hatches shadows, and **Density** (Normal 1× to Max 3×) packs the tone lines tighter — at Max the darkest areas overlap and almost the whole page is marked, which makes for a very long plot.
 
 Run the algorithm checks with `node --test tests/color.test.cjs tests/fill.test.cjs` and the isolated gallery API test with `node --test tests/server.test.mjs`. Open `tests/browser.html` through the local server to run browser checks for conversion, color persistence, previews and generated tool changes. The regression artwork in `tests/fixtures/complex-fill.svg` includes a hole, concave branches and a thin fill. These checks do not contact the plotter.
