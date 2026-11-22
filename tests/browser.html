@@ -103,7 +103,7 @@ document.querySelector('#app').onload = async ({ target }) => {
     const expectedTravels = evaluate("(function () { var order = [0, 1, 3, 2]; var pen = null; var tool = null; var travels = order.map(function (i) { var s = state.strokes[i]; var t = toolForStroke(s); if (t !== tool) { tool = t; pen = null; } var a = plotPoint(s[0]), b = plotPoint(s[s.length - 1]); var entry = !pen || distance(pen, a) <= distance(pen, b) ? a : b; pen = entry === a ? b : a; return 'G0 X' + formatMm(entry.x) + ' Y' + formatMm(entry.y) + ' F' + Math.round(feeds().travel); }); travels.push('G0 X0 Y' + formatMm(dimensions().height) + ' F' + Math.round(feeds().travel)); return travels; })()");
     check(JSON.stringify(gcode.match(/^G0 .*$/gm)) === JSON.stringify(expectedTravels), 'Grouping retains every path in its original order within each marker, entering each from its nearer end, then parks');
     check(evaluate('JSON.stringify(serializeStrokes(state.strokes))') === originalStrokes, 'Generating grouped G-code preserves canvas strokes and their order');
-    const lift = evaluate('PEN_UP.join("\\n")');
+    const lift = evaluate('(function(){var l=[]; penUp(l); return l.join("\\n");})()');
     check(gcode.includes(lift + '\nM400 ; finish moves before changing marker\nT6 ; marker #2d4e9e\n' + lift), 'Tool change waits for moves and lifts pen before and after selection');
     check(evaluate('serializeStrokes(deserializeStrokes(serializeStrokes(state.strokes)))[0].color') === '#e53935', 'Color survives gallery serialization round trip');
     check(evaluate('cloneStrokes(state.strokes)[0].color') === '#e53935', 'Undo clones retain stroke color');

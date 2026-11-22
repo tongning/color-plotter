@@ -1,7 +1,14 @@
 /* Small Plotter browser application. */
 
-const PEN_DOWN = ["M280 P0 S168", "G4 P25"];
-const PEN_UP = ["M280 P0 S150", "G4 P25"];
+// Servo angles for pen down/up. The dwell after each move is configurable
+// (admin panel, "Servo delay", stored in localStorage); 25ms is the default.
+// A 0ms delay omits the dwell entirely.
+const PEN_DOWN_SERVO = "M280 P0 S168";
+const PEN_UP_SERVO = "M280 P0 S150";
+const DEFAULT_SERVO_DELAY_MS = 25;
+function servoDelayMs() {
+  return safeNumber($("#servoDelay").value, DEFAULT_SERVO_DELAY_MS, 0);
+}
 
 // The pen is 1.6mm wide, so a link shorter than this hides under the pen's
 // own width at the joints. Consecutive same-marker strokes closer than
@@ -45,7 +52,7 @@ const SAVED_DRAWINGS_KEY = "smallPlotter.savedDrawings.v1";
 const APP_SETTINGS_KEY = "smallPlotter.settings.v1";
 const PERSISTED_SETTING_IDS = [
   "duetEndpoint", "workWidth", "workHeight", "drawFeed", "travelFeed",
-  "startAfterUpload", "gallerySort",
+  "servoDelay", "startAfterUpload", "gallerySort",
 ];
 
 const state = {
@@ -121,6 +128,8 @@ function saveAppSettings() {
 }
 
 restoreAppSettings();
+// Sync the servo-delay label with the restored value (the static HTML says 25 ms).
+$("#servoDelayValue").textContent = `${servoDelayMs()} ms`;
 
 function safeNumber(value, fallback, minimum = 0) {
   const number = Number(value);
@@ -614,8 +623,16 @@ function refreshGcodePreview() {
 
 /* ---------- gcode ---------- */
 
-function penUp(lines) { lines.push(...PEN_UP); }
-function penDown(lines) { lines.push(...PEN_DOWN); }
+function penUp(lines) {
+  lines.push(PEN_UP_SERVO);
+  const delay = servoDelayMs();
+  if (delay > 0) lines.push(`G4 P${delay}`);
+}
+function penDown(lines) {
+  lines.push(PEN_DOWN_SERVO);
+  const delay = servoDelayMs();
+  if (delay > 0) lines.push(`G4 P${delay}`);
+}
 
 function plotReadyStroke(stroke) {
   // Squiggle lines are already smooth sine curves — rounding them again only
@@ -730,6 +747,7 @@ function gcodeFingerprint() {
   const mix = (v) => { h ^= v >>> 0; h = Math.imul(h, 16777619) >>> 0; };
   mix(Math.round(width * 1000)); mix(Math.round(height * 1000));
   mix(Math.round(draw)); mix(Math.round(travel));
+  mix(servoDelayMs());
   for (const c of markerPalette.join("")) mix(c.charCodeAt(0));
   mix(state.strokes.length);
   for (const stroke of state.strokes) {
@@ -2858,12 +2876,13 @@ $("#logsPassword").addEventListener("keydown", (event) => {
 
 /* ---------- drawing area defaults ---------- */
 
-const DRAWING_AREA_DEFAULTS = [["#workWidth", 118], ["#workHeight", 118], ["#drawFeed", 18000], ["#travelFeed", 30000]];
+const DRAWING_AREA_DEFAULTS = [["#workWidth", 118], ["#workHeight", 118], ["#drawFeed", 18000], ["#travelFeed", 30000], ["#servoDelay", 25]];
 
 $("#drawingAreaReset").addEventListener("click", () => {
   for (const [selector, value] of DRAWING_AREA_DEFAULTS) $(selector).value = value;
   $("#drawFeedValue").textContent = `${feeds().draw} mm/min`;
   $("#travelFeedValue").textContent = `${feeds().travel} mm/min`;
+  $("#servoDelayValue").textContent = `${servoDelayMs()} ms`;
   saveAppSettings();
   updateUi();
   logLine("APP", "drawing area settings reset to defaults");
@@ -2909,10 +2928,11 @@ gcodeButton.addEventListener("click", () => {
 });
 $("#closeGcode").addEventListener("click", () => gcodeButton.click());
 
-for (const input of [$("#workWidth"), $("#workHeight"), $("#drawFeed"), $("#travelFeed")]) {
+for (const input of [$("#workWidth"), $("#workHeight"), $("#drawFeed"), $("#travelFeed"), $("#servoDelay")]) {
   input.addEventListener("input", () => {
     $("#drawFeedValue").textContent = `${feeds().draw} mm/min`;
     $("#travelFeedValue").textContent = `${feeds().travel} mm/min`;
+    $("#servoDelayValue").textContent = `${servoDelayMs()} ms`;
     if (input.id === "workWidth" || input.id === "workHeight") updateBedAspect();
     updateUi();
   });
