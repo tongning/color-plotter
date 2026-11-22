@@ -30,10 +30,26 @@ const JOB_START = ["M280 P0 S150", "G4 P60", "G28 ; home axes with the pen lifte
 // disable the motors. No homing at the end — the start of the job already
 // homed, and parking is faster than re-homing.
 
-const MARKER_PALETTE_KEY = "smallPlotter.markerPalette.v2";
+const MARKER_PALETTE_KEY = "colorPlotter.markerPalette.v2";
+// Legacy key from when this app shared the "smallPlotter.*" prefix with
+// tongning/small-plotter (the earlier single-pen plotter). localStorage is
+// per-origin, so both apps read the same keys when served from the same
+// host/port or the same GitHub Pages user site. Only the palette migrates:
+// it is color-plotter-only (small-plotter has no palette), so carrying it
+// over cannot import small-plotter state. Settings, drawings, and selfie
+// keys deliberately do NOT migrate — they start fresh under the new prefix.
+const LEGACY_MARKER_PALETTE_KEY = "smallPlotter.markerPalette.v2";
 let markerPalette = PlotterColor.DEFAULT_PALETTE.slice();
 try {
-  const saved = JSON.parse(localStorage.getItem(MARKER_PALETTE_KEY));
+  let saved = JSON.parse(localStorage.getItem(MARKER_PALETTE_KEY));
+  if (!Array.isArray(saved) || saved.length !== 8 || !saved.every(PlotterColor.isColor)) {
+    const legacy = JSON.parse(localStorage.getItem(LEGACY_MARKER_PALETTE_KEY));
+    if (Array.isArray(legacy) && legacy.length === 8 && legacy.every(PlotterColor.isColor)) {
+      saved = legacy;
+      try { localStorage.setItem(MARKER_PALETTE_KEY, JSON.stringify(saved)); } catch { /* private mode */ }
+      try { localStorage.removeItem(LEGACY_MARKER_PALETTE_KEY); } catch { /* private mode */ }
+    }
+  }
   if (Array.isArray(saved) && saved.length === 8 && saved.every(PlotterColor.isColor)) markerPalette = saved;
 } catch { /* use factory palette */ }
 let activeMarker = 0;
@@ -48,8 +64,8 @@ const FILL_SPACING = 2.5; // px between hatch lines on that raster (~0.7mm on th
 const FILL_EDGE_GAP = -0.5; // px along a hatch line between its endpoint and the shape edge: negative extends past the edge, into the outline (Cura-style skin overlap, ~20% of the spacing)
 const FILL_CONNECT_MAX = 4 * FILL_SPACING; // px along the boundary a hatch connector may run before the pen lifts instead (Cura-style: short wall-hugging links only)
 const PLOT_FILENAME = "small-plotter.gcode";
-const SAVED_DRAWINGS_KEY = "smallPlotter.savedDrawings.v1";
-const APP_SETTINGS_KEY = "smallPlotter.settings.v1";
+const SAVED_DRAWINGS_KEY = "colorPlotter.savedDrawings.v1";
+const APP_SETTINGS_KEY = "colorPlotter.settings.v1";
 const PERSISTED_SETTING_IDS = [
   "duetEndpoint", "workWidth", "workHeight", "drawFeed", "travelFeed",
   "servoDelay", "startAfterUpload", "gallerySort",
@@ -1846,7 +1862,7 @@ const SQUIGGLE_PRESETS = {
   selfie: { lines: 45, freq: 90, amp: 1.5, bright: 0, contrast: 40, mod: "AM", size: 100 },
 };
 
-const SELFIE_PRESET_KEY = "selfiePreset";
+const SELFIE_PRESET_KEY = "colorPlotter.selfiePreset";
 
 function clampNumber(value, min, max, fallback) {
   const number = Number(value);
@@ -1977,7 +1993,7 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /* ---------- background removal (on-device ML, vendored TF.js) ---------- */
 
-const REMOVE_BG_KEY = "smallPlotter.removeBackground";
+const REMOVE_BG_KEY = "colorPlotter.removeBackground";
 let segmenterPromise = null;
 let segmenterWarmupPromise = null;
 
@@ -2156,7 +2172,7 @@ async function takeSelfie() {
 snapButton.addEventListener("click", takeSelfie);
 $("#retakeButton").addEventListener("click", () => showView("selfie"));
 
-const SELFIE_SIZE_KEY = "smallPlotter.selfieSize";
+const SELFIE_SIZE_KEY = "colorPlotter.selfieSize";
 
 function setSelfieSize(size) {
   state.selfieSize = size;
