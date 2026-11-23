@@ -1,4 +1,4 @@
-# Small Plotter
+# Color Plotter
 
 A drawing app, color SVG converter, and public artwork gallery for an eight-marker pen plotter running RepRapFirmware / Duet Web Control.
 
@@ -13,7 +13,7 @@ Built-in pictures are discovered from every unique `.gcode` basename in `assets/
 3. Open **⚙️ Admin** and unlock it with the built-in UI password, `meowl`. Under **Duet connection**, enter the board address, for example `http://192.168.1.42` (a pasted `/rr_upload` suffix also works). The optional Duet password is separate from the admin UI password.
 4. Set **Tool colors** to match the markers loaded in `T0`–`T7`, and set **Drawing area** and speeds for the machine. The initial drawing area is 118 × 118 mm.
 5. Draw a picture, import a color SVG, take a selfie, or pick a premade picture.
-6. Click **Draw it!** to upload `0:/gcodes/small-plotter.gcode`. It starts after upload when **Admin → Job → Start after upload** is enabled.
+6. Click **Draw it!** to upload `0:/gcodes/color-plotter.gcode`. It starts after upload when **Admin → Job → Start after upload** is enabled.
 
 To download instead, open **⚙️ Admin → Job → Save .gcode** after preparing artwork. This saves the generated file, including marker tool changes, without contacting the board. **G-code** in the same section opens the job preview. Drawing, SVG conversion, previewing, and downloading work without a connected plotter.
 
@@ -47,7 +47,7 @@ G0 X0 Y… F…
 M84
 ```
 
-The browser sends the job directly to the Duet over HTTP; the Node.js server serves the app and gallery API. `rr_upload` receives a raw POST body, not multipart form data. Uploads include a CRC32, wait for the firmware's upload-status response, and verify the saved byte count with `rr_fileinfo` before `M32` is sent when responses are readable. The app attempts to delete the previous `small-plotter.gcode` before each upload so an equally-sized old file does not satisfy verification; deletion failures are logged. The app warms the Duet HTTP connection with `GET rr_upload` before each upload to avoid stale keep-alive resets seen in Firefox (`rr_connect` is used only when a password is entered). Upload POSTs use one controlled recovery attempt with the same filename and CRC; the start command is never retried because doing so could restart a running plot.
+The browser sends the job directly to the Duet over HTTP; the Node.js server serves the app and gallery API. `rr_upload` receives a raw POST body, not multipart form data. Uploads include a CRC32, wait for the firmware's upload-status response, and verify the saved byte count with `rr_fileinfo` before `M32` is sent when responses are readable. The app attempts to delete the previous `color-plotter.gcode` before each upload so an equally-sized old file does not satisfy verification; deletion failures are logged. The app warms the Duet HTTP connection with `GET rr_upload` before each upload to avoid stale keep-alive resets seen in Firefox (`rr_connect` is used only when a password is entered). Upload POSTs use one controlled recovery attempt with the same filename and CRC; the start command is never retried because doing so could restart a running plot.
 
 For full upload confirmation, serve this page over HTTP and allow its origin in RepRapFirmware with `M586`. If cross-origin responses cannot be read, including typical `file://` use, the app falls back to opaque requests. In that mode it serializes the upload-status and file-info requests and waits before starting, but cannot confirm upload success or the saved byte count. Use Duet Web Control to monitor or stop the running job.
 

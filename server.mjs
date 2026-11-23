@@ -361,6 +361,6 @@ const server = createServer(async (request, response) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(`Small Plotter listening on http://${HOST}:${PORT}`);
+  console.log(`Color Plotter listening on http://${HOST}:${PORT}`);
   console.log(`Saved drawings: ${STORE_FILE}`);
 });
