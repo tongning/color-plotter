@@ -176,6 +176,11 @@ document.querySelector('#app').onload = async ({ target }) => {
     const countBeforeDelete = evaluate('state.strokes.length');
     w.deleteSelection();
     check(evaluate('state.strokes.length') < countBeforeDelete && evaluate('state.strokes.length') === firstCount, 'Delete removes the selected import only');
+    // Selection only grabs imported SVG paths: a freehand stroke on top
+    // of an import is skipped, and clicking it selects nothing.
+    evaluate('state.strokes = state.strokes.concat([[{x:0.5,y:0.5},{x:0.6,y:0.5}]]); render();');
+    check(evaluate('selectableStrokeAt({x:0.55,y:0.5})') === null, 'Freehand strokes are not selectable');
+    check(evaluate('selectableStrokeAt({x:0.5,y:0.5})') !== null, 'Imported SVG paths are selectable through a freehand stroke on top');
     w.showView('draw');
     const complexSvg = await (await fetch('fixtures/complex-fill.svg')).text();
     w.testFillStrokes = await convert(complexSvg);

@@ -1321,12 +1321,12 @@ function markGalleryCopyEdited() {
 
 /* ---------- select tool: move/resize imported groups ---------- */
 
-// Each import (and each placed text block) tags its strokes with one
-// group id, so the select tool can grab the whole import as one object,
-// like an image in a doc. Ungrouped strokes select one at a time.
-function nextGroupId() {
+// Each import tags its strokes with one group id, so the select tool can
+// grab the whole import as one object, like an image in a doc. Placed
+// text blocks get their own prefix so they stay separate from imports.
+function nextGroupId(prefix = "import") {
   state.importSeq += 1;
-  return `import-${Date.now().toString(36)}-${state.importSeq}`;
+  return `${prefix}-${Date.now().toString(36)}-${state.importSeq}`;
 }
 
 function groupBBox(strokes) {
@@ -1386,11 +1386,16 @@ function distanceToStroke(point, stroke) {
   return best;
 }
 
-// Topmost stroke near the point (later strokes draw on top, so they win).
-function strokeAt(point) {
+// Selection only grabs imported SVG paths: freehand strokes, shapes, and
+// placed text are not objects to move around. Ungrouped strokes on top
+// are skipped, so clicking through a scribble onto an import still
+// selects the import underneath.
+function selectableStrokeAt(point) {
   const threshold = 0.015;
   for (let i = state.strokes.length - 1; i >= 0; i--) {
-    if (distanceToStroke(point, state.strokes[i]) <= threshold) return state.strokes[i];
+    const stroke = state.strokes[i];
+    if (!stroke.group || !stroke.group.startsWith("import-")) continue;
+    if (distanceToStroke(point, stroke) <= threshold) return stroke;
   }
   return null;
 }
@@ -1851,7 +1856,7 @@ canvas.addEventListener("pointerdown", (event) => {
       if (beginSelectDrag(point, handle)) { canvas.style.cursor = handleCursor(handle); render(); }
       return;
     }
-    const hit = strokeAt(point);
+    const hit = selectableStrokeAt(point);
     if (hit) {
       if (!selectionStrokes().includes(hit)) selectStrokes(groupOf(hit));
       markGalleryCopyEdited();
@@ -1881,7 +1886,7 @@ canvas.addEventListener("pointerdown", (event) => {
     if (!text.trim()) { showToast("Type some text first.", "error"); return; }
     const strokes = textPreviewStrokes(point);
     if (!strokes) { showToast("Nothing to place.", "error"); return; }
-    const textGroup = nextGroupId();
+    const textGroup = nextGroupId("text");
     for (const stroke of strokes) stroke.group = textGroup;
     state.textPreview = null;
     state.textPreviewPoint = null;
@@ -1911,7 +1916,7 @@ canvas.addEventListener("pointermove", (event) => {
   if (state.drawingTool === "select" && !state.activeStroke) {
     const bounds = canvas.getBoundingClientRect();
     const handle = handleAt({ x: event.clientX - bounds.left, y: event.clientY - bounds.top });
-    canvas.style.cursor = handle ? handleCursor(handle) : strokeAt(normalizedEventPoint(event)) ? "move" : "";
+    canvas.style.cursor = handle ? handleCursor(handle) : selectableStrokeAt(normalizedEventPoint(event)) ? "move" : "";
     return;
   }
   if (state.eraserStartStrokes) {
