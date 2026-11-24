@@ -170,6 +170,23 @@ document.querySelector('#app').onload = async ({ target }) => {
     w.undo();
     const undoneBox = evaluate('groupBBox(state.strokes.filter(s => s.group === "' + addedGroup + '"))');
     check(Math.abs(undoneBox.minX - resizedBox.minX) < 0.001 && Math.abs(undoneBox.maxX - resizedBox.maxX) < 0.001 && Math.abs(undoneBox.maxY - resizedBox.maxY) < 0.001, 'Undo restores the import after a move');
+    // Off the page is allowed as long as part of it is on the page.
+    evaluate('setDrawingTool("select")');
+    evaluate('selectStrokes(state.strokes.filter(s => s.group === "' + addedGroup + '"))');
+    w.beginSelectDrag({ x: 0.4, y: 0.4 }, null);
+    w.updateSelectDrag({ x: 1.2, y: 0.4 });
+    w.endSelectDrag();
+    const offBedBox = evaluate('groupBBox(state.selection)');
+    check(offBedBox.minX > 0.7 && offBedBox.maxX > 1 && offBedBox.minX < 1, 'A move can hang a group off the bed as long as part of it stays on');
+    w.beginSelectDrag({ x: offBedBox.maxX, y: offBedBox.maxY }, 'se');
+    w.updateSelectDrag({ x: offBedBox.maxX + 0.3, y: offBedBox.maxY + 0.1 });
+    w.endSelectDrag();
+    const grownBox = evaluate('groupBBox(state.selection)');
+    check(grownBox.maxX > offBedBox.maxX && grownBox.minX < 1, 'A resize can grow a group off the bed as long as part of it stays on');
+    const offBedGcode = w.generateGcode();
+    const xs = [...offBedGcode.matchAll(/X(-?[\d.]+)/g)].map(m => Number(m[1]));
+    const ys = [...offBedGcode.matchAll(/Y(-?[\d.]+)/g)].map(m => Number(m[1]));
+    check(xs.length > 0 && xs.every(x => x >= 0 && x <= 118) && ys.every(y => y >= 0 && y <= 118), 'Off-bed parts are cropped from G-code instead of plotted');
     // Delete removes the selected import only.
     evaluate('setDrawingTool("select")');
     evaluate('selectStrokes(state.strokes.filter(s => s.group === state.strokes[state.strokes.length - 1].group))');
