@@ -69,9 +69,9 @@ Jobs lift the pen, wait for queued moves with `M400`, select the required marker
 
 ## Photo to sketch
 
-The **📷 Photo to sketch** panel in the draw view turns a reference photo into a colour pen sketch. It needs the Python converter on the machine running the server: `photo_to_plot_v3.py` with OpenCV (`cv2`), configured with `PHOTO_SKETCH_PYTHON` and `PHOTO_SKETCH_SCRIPT` (the defaults point at the author's local checkout, `/home/hatch/workspace/art/venv-sketch/bin/python` and `/home/hatch/workspace/art/photo_to_plot_v3.py`). Without it the endpoint answers 503 and the panel reports that the converter is missing.
+The **📷 Photo to sketch** panel in the draw view turns a reference photo into a colour pen sketch. Conversion runs fully in the browser (`photo-sketch.js`, no server call, no Python): the photo never leaves the tab, and the app works from a static file host with no converter to install.
 
-The photo is converted server-side (`POST /api/photo-sketch`, JPEG/PNG data URL, 15 MB body limit, 60 s timeout, temp files under `.data/tmp/`) and the resulting stroke-only SVG is loaded through the normal SVG import, so the same marker matching, preview, and G-code generation apply. Photos are fitted to a 118 × 140 mm portrait area — set **Drawing area** to 118 × 140 for photo sketches (the app default is 118 × 118).
+The resulting stroke-only SVG is loaded through the normal SVG import, so the same marker matching, preview, and G-code generation apply. Photos are fitted to a 118 × 140 mm portrait area — set **Drawing area** to 118 × 140 for photo sketches (the app default is 118 × 118).
 
 Shading modes (the **Shading** select):
 
@@ -81,7 +81,8 @@ Shading modes (the **Shading** select):
 - **Hybrid (gradient + flow)** — a sparse gradient underlayer with flow on top.
 - **Plotcaster flow** — long, evenly spaced streamlines over a structure-tensor field; few pen lifts, fast plots.
 - **Wave squiggle** — horizontal sine-wave scanlines whose amplitude and frequency follow darkness; no contour lines in this mode.
+- **TSP tour** — one continuous line through tone-weighted dots per pen; no lifts within a pen, best on soft photos with no strong direction.
 
-Colours are quantised to the eight loaded markers (default palette: BIC Cristal Xtra Bold 1.6 mm — black, red, pink, sky blue, lime, turquoise, blue, violet) by OKLab distance, the same matching as SVG import. **More detail** adds finer structure lines, **Dramatic shading** darkens the mids and cross-hatches shadows, and **Density** (Normal 1× to Max 3×) packs the tone lines tighter — at Max the darkest areas overlap and almost the whole page is marked, which makes for a very long plot.
+Colours are quantised to the eight loaded markers (default palette: BIC Cristal Xtra Bold 1.6 mm — black, red, pink, sky blue, lime, turquoise, blue, violet) by OKLab distance, the same matching as SVG import. **More detail** adds finer structure lines, **Dramatic shading** darkens the mids and cross-hatches shadows, and **Density** (Normal 1× to Max 5×) packs the tone lines tighter — at Max the darkest areas overlap and almost the whole page is marked, which makes for a very long plot.
 
 Run the algorithm checks with `node --test tests/color.test.cjs tests/fill.test.cjs` and the isolated gallery API test with `node --test tests/server.test.mjs`. Open `tests/browser.html` through the local server to run browser checks for conversion, color persistence, previews and generated tool changes. The regression artwork in `tests/fixtures/complex-fill.svg` includes a hole, concave branches and a thin fill. These checks do not contact the plotter.

@@ -3454,21 +3454,15 @@ $("#svgFile").addEventListener("change", async (event) => {
 
 /* ---------- photo to sketch ---------- */
 
-function readFileAsDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = () => reject(new Error("Could not read the photo."));
-    reader.readAsDataURL(file);
-  });
-}
-
 $("#goPhoto").addEventListener("click", () => {
   $("#photoPanel").classList.remove("hidden");
   squigglePanel.classList.add("hidden");
   showView("draw");
 });
 
+// Conversion runs fully in the browser (photo-sketch.js): the photo
+// never leaves the tab, and the resulting stroke-only SVG loads
+// through the same import path as a file.
 $("#photoConvert").addEventListener("click", async () => {
   const file = $("#photoFile").files[0];
   if (!file) { showToast("Choose a photo first.", "error"); return; }
@@ -3476,25 +3470,16 @@ $("#photoConvert").addEventListener("click", async () => {
   button.disabled = true;
   const importProgress = $("#importProgress");
   try {
-    importProgress.textContent = "Converting photo…";
     importProgress.classList.remove("hidden");
-    const image = await readFileAsDataUrl(file);
-    const response = await fetch("/api/photo-sketch", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        image,
-        detail: $("#photoDetail").checked,
-        dramatic: $("#photoDramatic").checked,
-        adaptive: $("#photoAdaptive").checked,
-        shading: $("#photoShading").value,
-        density: Number($("#photoDensity").value),
-      }),
-    });
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(result.error || "Photo conversion failed.");
-    if (typeof result.svg !== "string" || !result.svg.includes("<svg")) throw new Error("Photo conversion returned no sketch.");
-    await importSvgText(result.svg, `${file.name.replace(/\.[^.]+$/, "")} sketch`);
+    const { svg } = await PhotoSketch.convertImage(file, {
+      detail: $("#photoDetail").checked,
+      dramatic: $("#photoDramatic").checked,
+      adaptive: $("#photoAdaptive").checked,
+      shading: $("#photoShading").value,
+      density: Number($("#photoDensity").value),
+    }, (label) => { importProgress.textContent = label; });
+    if (typeof svg !== "string" || !svg.includes("<svg")) throw new Error("Photo conversion returned no sketch.");
+    await importSvgText(svg, `${file.name.replace(/\.[^.]+$/, "")} sketch`);
   } catch (error) {
     showToast(error.message || "Could not convert this photo.", "error");
   } finally {

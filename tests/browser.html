@@ -240,6 +240,57 @@ document.querySelector('#app').onload = async ({ target }) => {
     check(erased.length === 2 && erased[0].splitIds && erased[0].splitIds[0] === erased[1].splitIds[0], 'Eraser fragments share a split id');
     evaluate(`state.strokes = [Object.assign([{x:.1,y:.5},{x:.2,y:.5}], {color:'#e42e2a', shape:true, splitIds:['hlr-1']}), Object.assign([{x:.205,y:.5},{x:.3,y:.5}], {color:'#e42e2a', shape:true, splitIds:['hlr-1']})];`);
     check(evaluate(`deserializeStrokes(serializeStrokes(state.strokes))[0].splitIds[0]`) === 'hlr-1', 'Split ids survive gallery serialization round trip');
+    // Photo to sketch runs fully in the browser: the converter takes
+    // pixels and returns the same stroke SVG the server used to.
+    const photoResult = await evaluate(`(async () => {
+      const c = document.createElement('canvas'); c.width = 120; c.height = 90;
+      const x = c.getContext('2d');
+      // Full-frame gradient with a black disc: enough tone area that
+      // higher density packs strictly more ink (a thin strip alone
+      // saturates the flow's occupancy grid at density 1).
+      const g = x.createLinearGradient(0, 0, 120, 0);
+      g.addColorStop(0, '#000'); g.addColorStop(1, '#fff');
+      x.fillStyle = g; x.fillRect(0, 0, 120, 90);
+      x.fillStyle = '#000'; x.beginPath(); x.arc(60, 45, 25, 0, 7); x.fill();
+      const px = x.getImageData(0, 0, 120, 90);
+      const d1 = await PhotoSketch.convertPixels(px, { shading: 'off', density: 1 });
+      const d5 = await PhotoSketch.convertPixels(px, { shading: 'off', density: 5 });
+      const tsp = await PhotoSketch.convertPixels(px, { shading: 'tsp', density: 1 });
+      const blank = document.createElement('canvas'); blank.width = 40; blank.height = 30;
+      const bx = blank.getContext('2d'); bx.fillStyle = '#fff'; bx.fillRect(0, 0, 40, 30);
+      const w0 = await PhotoSketch.convertPixels(bx.getImageData(0, 0, 40, 30), { shading: 'off' });
+      return { d1: { svg: d1.svg, stats: d1.stats }, d5: d5.stats, tsp: tsp.stats, w0: w0.stats };
+    })()`);
+    check(photoResult.d1.svg.includes('viewBox="0 0 480 480"'), 'In-browser photo conversion returns a 480 viewBox SVG');
+    check(photoResult.d1.stats.structurePaths > 0 && photoResult.d1.stats.tonePaths > 0, 'In-browser photo conversion finds structure and tone');
+    check(photoResult.d5.toneM > photoResult.d1.stats.toneM, 'In-browser density 5 packs more tone ink than density 1');
+    check(photoResult.tsp.tonePaths === 1 + photoResult.tsp.colourLayers.length, 'In-browser TSP mode draws one tour per pen');
+    check(photoResult.w0.tonePaths === 0 && photoResult.w0.structurePaths === 0, 'A blank white photo converts to nothing in the browser');
+    const photoStrokes = await convert(photoResult.d1.svg);
+    check(photoStrokes.length > 0 && photoStrokes.every((s) => s.every((pt) => pt.x >= 0 && pt.x <= 1 && pt.y >= 0 && pt.y <= 1)), 'Converted photo SVG imports through the normal path');
+    // The Convert button drives the whole flow without a network call:
+    // fetch is stubbed to reject, and the photo still lands as strokes.
+    await evaluate(`(async () => {
+      const c = document.createElement('canvas'); c.width = 120; c.height = 90;
+      const x = c.getContext('2d');
+      const g = x.createLinearGradient(0, 0, 120, 0);
+      g.addColorStop(0, '#000'); g.addColorStop(1, '#fff');
+      x.fillStyle = g; x.fillRect(0, 0, 120, 90);
+      x.fillStyle = '#000'; x.beginPath(); x.arc(60, 45, 25, 0, 7); x.fill();
+      const blob = await new Promise((res) => c.toBlob(res, 'image/png'));
+      const dt = new DataTransfer();
+      dt.items.add(new File([blob], 'test.png', { type: 'image/png' }));
+      document.querySelector('#photoFile').files = dt.files;
+      window.__origFetch = window.fetch;
+      window.fetch = () => Promise.reject(new Error('fetch during photo conversion'));
+      document.querySelector('#photoConvert').click();
+    })()`);
+    for (let i = 0; i < 60; i++) {
+      await new Promise((r) => setTimeout(r, 250));
+      if (evaluate('document.querySelector("#importProgress").classList.contains("hidden")')) break;
+    }
+    check(evaluate('state.premadeSource') === 'test sketch' && evaluate('state.strokes.length') > 0, 'Convert button converts a photo into strokes with no server call');
+    evaluate('window.fetch = window.__origFetch');
     delete w.testFillStrokes;
     output.textContent = results.join('\n');
     document.body.dataset.testResult = 'passed';

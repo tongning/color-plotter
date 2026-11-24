@@ -1,7 +1,6 @@
 import { createServer } from "node:http";
-import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { access, mkdir, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { dirname, extname, join, normalize, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -13,16 +12,6 @@ const STORE_TEMP = join(DATA_DIR, "drawings.tmp.json");
 const PORT = Number(process.env.PORT) || 8080;
 const HOST = process.env.HOST || "127.0.0.1";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "meowl";
-
-// Photo-to-sketch converter (Python, OpenCV). The flags passed to it are
-// fixed strings derived only from the validated booleans/enum below;
-// the command never goes through a shell.
-const PHOTO_SKETCH_PYTHON = process.env.PHOTO_SKETCH_PYTHON || "/home/hatch/workspace/art/venv-sketch/bin/python";
-const PHOTO_SKETCH_SCRIPT = process.env.PHOTO_SKETCH_SCRIPT || "/home/hatch/workspace/art/photo_to_plot_v3.py";
-const PHOTO_SKETCH_TIMEOUT_MS = 60_000;
-const MAX_PHOTO_BODY_BYTES = 15 * 1024 * 1024;
-const TMP_DIR = join(DATA_DIR, "tmp");
-const SHADING_MODES = ["off", "gradient", "cross", "hybrid", "plotcaster", "squiggle", "tsp"];
 
 const MIME_TYPES = {
   ".css": "text/css; charset=utf-8",
@@ -89,49 +78,6 @@ async function readJson(request) {
   }
   try { return JSON.parse(Buffer.concat(chunks).toString("utf8")); }
   catch { throw httpError(400, "Request body must be valid JSON."); }
-}
-
-async function readBody(request, maxBytes) {
-  const chunks = [];
-  let size = 0;
-  for await (const chunk of request) {
-    size += chunk.length;
-    if (size > maxBytes) throw httpError(413, "Request body is too large.");
-    chunks.push(chunk);
-  }
-  return Buffer.concat(chunks);
-}
-
-function execFileAsync(file, args, options) {
-  return new Promise((resolve, reject) => {
-    execFile(file, args, options, (error, stdout, stderr) => {
-      if (error) reject(Object.assign(error, { stdout, stderr }));
-      else resolve({ stdout, stderr });
-    });
-  });
-}
-
-// Probed once: is the converter installed, and does this copy of it
-// support the --shading flag yet (it is being added separately)?
-let photoSketchSupportCache;
-async function getPhotoSketchSupport() {
-  if (!photoSketchSupportCache) {
-    photoSketchSupportCache = (async () => {
-      try {
-        await access(PHOTO_SKETCH_PYTHON);
-        await access(PHOTO_SKETCH_SCRIPT);
-      } catch {
-        return { available: false, shading: false };
-      }
-      try {
-        const { stdout } = await execFileAsync(PHOTO_SKETCH_PYTHON, [PHOTO_SKETCH_SCRIPT, "--help"], { timeout: 15_000 });
-        return { available: true, shading: String(stdout).includes("--shading") };
-      } catch {
-        return { available: false, shading: false };
-      }
-    })();
-  }
-  return photoSketchSupportCache;
 }
 
 function cleanText(value, label) {
@@ -263,59 +209,6 @@ async function handleApi(request, response, url) {
       return count;
     });
     return sendJson(response, 200, { ok: true, deleted });
-  }
-
-  if (request.method === "POST" && url.pathname === "/api/photo-sketch") {
-    const body = await readBody(request, MAX_PHOTO_BODY_BYTES);
-    let input;
-    try { input = JSON.parse(body.toString("utf8")); }
-    catch { throw httpError(400, "Request body must be valid JSON."); }
-    const match = typeof input?.image === "string"
-      && input.image.match(/^data:image\/(jpeg|jpg|png);base64,([A-Za-z0-9+/=]+)$/);
-    if (!match) throw httpError(400, "image must be a JPEG or PNG data URL.");
-    const detail = input.detail === true;
-    const dramatic = input.dramatic === true;
-    const adaptive = input.adaptive !== false;
-    const shading = typeof input.shading === "string" ? input.shading : "off";
-    if (!SHADING_MODES.includes(shading)) throw httpError(400, "shading must be off, gradient, cross, hybrid, plotcaster, squiggle or tsp.");
-    const density = typeof input.density === "number" && isFinite(input.density)
-      ? input.density : 1;
-    if (density < 0.5 || density > 5) throw httpError(400, "density must be between 0.5 and 5.");
-    const support = await getPhotoSketchSupport();
-    if (!support.available) throw httpError(503, "Photo sketch is not set up on this server: the converter is missing.");
-    if (shading !== "off" && !support.shading) throw httpError(400, "The installed converter does not support shading yet.");
-    const bytes = Buffer.from(match[2], "base64");
-    if (bytes.length === 0 || bytes.length > MAX_PHOTO_BODY_BYTES) throw httpError(400, "Photo is empty or too large.");
-    const ext = match[1] === "png" ? "png" : "jpg";
-    await mkdir(TMP_DIR, { recursive: true });
-    const id = randomUUID();
-    const inputPath = join(TMP_DIR, `${id}.${ext}`);
-    const outputPath = join(TMP_DIR, `${id}.svg`);
-    try {
-      await writeFile(inputPath, bytes);
-      const args = [PHOTO_SKETCH_SCRIPT, inputPath, "-o", outputPath];
-      if (detail) args.push("--detail");
-      if (dramatic) args.push("--dramatic");
-      if (!adaptive) args.push("--no-adaptive-smoothing");
-      if (shading !== "off") args.push("--shading", shading);
-      if (density !== 1) args.push("--density", String(density));
-      let run;
-      try {
-        run = await execFileAsync(PHOTO_SKETCH_PYTHON, args, { timeout: PHOTO_SKETCH_TIMEOUT_MS, maxBuffer: 1024 * 1024 });
-      } catch (error) {
-        if (error.code === "ETIMEDOUT" || error.killed) throw httpError(504, "Photo conversion timed out.");
-        const lastLine = String(error.stderr || error.message || "").trim().split("\n").pop();
-        throw httpError(500, `Photo conversion failed${lastLine ? `: ${lastLine}` : "."}`);
-      }
-      let svg;
-      try { svg = await readFile(outputPath, "utf8"); }
-      catch { throw httpError(500, "Photo conversion produced no sketch."); }
-      if (!svg.includes("<svg")) throw httpError(500, "Photo conversion produced no sketch.");
-      return sendJson(response, 200, { svg, stats: String(run.stdout || "").trim() });
-    } finally {
-      await unlink(inputPath).catch(() => {});
-      await unlink(outputPath).catch(() => {});
-    }
   }
 
   throw httpError(404, "API endpoint not found.");
