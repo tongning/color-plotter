@@ -205,6 +205,14 @@ document.querySelector('#app').onload = async ({ target }) => {
     check(evaluate('new Set(state.strokes.map(toolForStroke)).size') === 3, 'Complex filled SVG imports strokes in all three colors');
     const filledGcode = w.generateGcode();
     check(filledGcode.includes('T1') && filledGcode.includes('T6') && filledGcode.includes('T4'), 'Complex imported fills generate G-code for all colors');
+    // Pen preview thickness is a persisted setting, default 1.35 px.
+    check(evaluate('previewStrokeWidthPx()') === 1.35, 'Pen preview defaults to 1.35 px');
+    evaluate('document.querySelector("#previewStrokeWidth").value = "3"; document.querySelector("#previewStrokeWidth").dispatchEvent(new Event("input", {bubbles:true}))');
+    check(evaluate('previewStrokeWidthPx()') === 3, 'Pen preview thickness setting changes the preview');
+    check(w.document.querySelector('#previewStrokeWidthValue').textContent === '3 px', 'Pen preview thickness label follows the slider');
+    check(JSON.parse(w.localStorage.getItem('colorPlotter.settings.v1')).previewStrokeWidth === '3', 'Pen preview thickness persists in settings');
+    w.document.querySelector('#drawingAreaReset').click();
+    check(evaluate('previewStrokeWidthPx()') === 1.35, 'Drawing area reset restores the 1.35 px preview');
     const sample = new URLSearchParams(location.search).get('sample');
     if (sample) {
       w.testFillStrokes = await convert(await (await fetch(sample)).text());

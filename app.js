@@ -10,6 +10,14 @@ function servoDelayMs() {
   return safeNumber($("#servoDelay").value, DEFAULT_SERVO_DELAY_MS, 0);
 }
 
+// How thick strokes look on the preview canvas, in CSS pixels. Preview
+// only — the pen itself is 1.6mm wide and the G-code is unaffected.
+// (Admin panel, "Pen preview thickness", stored in localStorage.)
+const DEFAULT_PREVIEW_STROKE_WIDTH_PX = 1.35;
+function previewStrokeWidthPx() {
+  return safeNumber($("#previewStrokeWidth").value, DEFAULT_PREVIEW_STROKE_WIDTH_PX, 0.5);
+}
+
 // The pen is 1.6mm wide, so a link shorter than this hides under the pen's
 // own width at the joints. Consecutive same-marker strokes closer than
 // this stay connected instead of lifting, travelling, and lowering.
@@ -68,7 +76,7 @@ const SAVED_DRAWINGS_KEY = "colorPlotter.savedDrawings.v1";
 const APP_SETTINGS_KEY = "colorPlotter.settings.v1";
 const PERSISTED_SETTING_IDS = [
   "duetEndpoint", "workWidth", "workHeight", "drawFeed", "travelFeed",
-  "servoDelay", "startAfterUpload", "gallerySort",
+  "servoDelay", "previewStrokeWidth", "startAfterUpload", "gallerySort",
 ];
 
 const state = {
@@ -147,8 +155,10 @@ function saveAppSettings() {
 }
 
 restoreAppSettings();
-// Sync the servo-delay label with the restored value (the static HTML says 25 ms).
+// Sync the servo-delay and preview-thickness labels with the restored
+// values (the static HTML says 25 ms and 1.35 px).
 $("#servoDelayValue").textContent = `${servoDelayMs()} ms`;
+$("#previewStrokeWidthValue").textContent = `${previewStrokeWidthPx()} px`;
 
 function safeNumber(value, fallback, minimum = 0) {
   const number = Number(value);
@@ -597,7 +607,7 @@ function drawStrokeOn(targetContext, size, stroke, lineWidth = 1.35, height = si
 }
 
 function drawStroke(stroke) {
-  drawStrokeOn(ctx, state.canvasWidth, stroke, 1.35, state.canvasHeight);
+  drawStrokeOn(ctx, state.canvasWidth, stroke, previewStrokeWidthPx(), state.canvasHeight);
 }
 
 function render() {
@@ -3223,14 +3233,16 @@ $("#logsPassword").addEventListener("keydown", (event) => {
 
 /* ---------- drawing area defaults ---------- */
 
-const DRAWING_AREA_DEFAULTS = [["#workWidth", 118], ["#workHeight", 118], ["#drawFeed", 18000], ["#travelFeed", 30000], ["#servoDelay", 25]];
+const DRAWING_AREA_DEFAULTS = [["#workWidth", 118], ["#workHeight", 118], ["#drawFeed", 18000], ["#travelFeed", 30000], ["#servoDelay", 25], ["#previewStrokeWidth", 1.35]];
 
 $("#drawingAreaReset").addEventListener("click", () => {
   for (const [selector, value] of DRAWING_AREA_DEFAULTS) $(selector).value = value;
   $("#drawFeedValue").textContent = `${feeds().draw} mm/min`;
   $("#travelFeedValue").textContent = `${feeds().travel} mm/min`;
   $("#servoDelayValue").textContent = `${servoDelayMs()} ms`;
+  $("#previewStrokeWidthValue").textContent = `${previewStrokeWidthPx()} px`;
   saveAppSettings();
+  render();
   updateUi();
   logLine("APP", "drawing area settings reset to defaults");
 });
@@ -3275,12 +3287,14 @@ gcodeButton.addEventListener("click", () => {
 });
 $("#closeGcode").addEventListener("click", () => gcodeButton.click());
 
-for (const input of [$("#workWidth"), $("#workHeight"), $("#drawFeed"), $("#travelFeed"), $("#servoDelay")]) {
+for (const input of [$("#workWidth"), $("#workHeight"), $("#drawFeed"), $("#travelFeed"), $("#servoDelay"), $("#previewStrokeWidth")]) {
   input.addEventListener("input", () => {
     $("#drawFeedValue").textContent = `${feeds().draw} mm/min`;
     $("#travelFeedValue").textContent = `${feeds().travel} mm/min`;
     $("#servoDelayValue").textContent = `${servoDelayMs()} ms`;
+    $("#previewStrokeWidthValue").textContent = `${previewStrokeWidthPx()} px`;
     if (input.id === "workWidth" || input.id === "workHeight") updateBedAspect();
+    if (input.id === "previewStrokeWidth") render();
     updateUi();
   });
 }
