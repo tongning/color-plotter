@@ -195,6 +195,7 @@
             <canvas id="drawCanvas" aria-label="Drawing canvas. Drag or draw with your pen, mouse, or touch."></canvas>
           </div>
           <div class="drawing-tools" id="drawingTools" role="toolbar" aria-label="Drawing tools">
+            <button data-drawing-tool="select" type="button" aria-pressed="false" title="Select (V)">↖ Select <span class="key-hint">V</span></button>
             <button class="active" data-drawing-tool="pencil" type="button" aria-pressed="true" title="Pencil (P)">✏️ Pencil <span class="key-hint">P</span></button>
             <button data-drawing-tool="line" type="button" aria-pressed="false" title="Line (L)">╱ Line <span class="key-hint">L</span></button>
             <button data-drawing-tool="rectangle" type="button" aria-pressed="false" title="Rectangle (R)">▭ Rectangle <span class="key-hint">R</span></button>
@@ -218,7 +219,7 @@
             <input id="textSize" type="number" value="10" min="1" max="100" step="1" aria-label="Text size in millimetres">
           </label>
         </div>
-        <p class="shortcut-help">Shortcuts: <span class="key-hint">P</span> pencil, <span class="key-hint">L</span> line, <span class="key-hint">R</span> rectangle, <span class="key-hint">E</span> ellipse, <span class="key-hint">F</span> fill, <span class="key-hint">X</span> eraser, <span class="key-hint">T</span> text, <span class="key-hint">1</span>–<span class="key-hint">8</span> pick a marker. Hold <span class="key-hint">Shift</span> while dragging a line to snap it to 8 directions, or a rectangle/ellipse to make it a square/circle.</p>
+        <p class="shortcut-help">Shortcuts: <span class="key-hint">V</span> select, <span class="key-hint">P</span> pencil, <span class="key-hint">L</span> line, <span class="key-hint">R</span> rectangle, <span class="key-hint">E</span> ellipse, <span class="key-hint">F</span> fill, <span class="key-hint">X</span> eraser, <span class="key-hint">T</span> text, <span class="key-hint">1</span>–<span class="key-hint">8</span> pick a marker. Hold <span class="key-hint">Shift</span> while dragging a line to snap it to 8 directions, or a rectangle/ellipse to make it a square/circle. With Select, drag an import to move it, drag a handle to resize it, <span class="key-hint">Delete</span> removes it.</p>
 
         <div class="canvas-actions">
           <button id="undoButton" type="button" disabled>↩︎ Undo</button>

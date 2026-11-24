@@ -92,6 +92,9 @@ const state = {
   galleryDrawing: null,
   galleryCopyDirty: false,
   premadeSource: null,
+  selection: [], // strokes currently selected with the select tool
+  selectDrag: null, // in-progress move/resize drag, or null
+  importSeq: 0, // counts imports, for the collage cascade offset
   galleryDrawings: [],
   galleryDeleteMode: false,
   adminUnlocked: false,
@@ -442,6 +445,7 @@ function cloneStroke(stroke) {
   const copy = stroke.map((point) => ({ x: point.x, y: point.y }));
   if (stroke.shape) copy.shape = true;
   if (stroke.squiggle) copy.squiggle = true;
+  if (stroke.group) copy.group = stroke.group;
   if (PlotterColor.isColor(stroke.color)) copy.color = stroke.color;
   return copy;
 }
@@ -454,6 +458,7 @@ function serializeStrokes(strokes) {
   return strokes.map((stroke) => ({
     points: stroke.map((point) => ({ x: point.x, y: point.y })),
     shape: Boolean(stroke.shape),
+    ...(stroke.group ? { group: stroke.group } : {}),
     ...(PlotterColor.isColor(stroke.color) ? { color: stroke.color } : {}),
   }));
 }
@@ -463,6 +468,7 @@ function deserializeStrokes(strokes) {
   return strokes.map((savedStroke) => {
     const stroke = (savedStroke.points || []).map((point) => ({ x: Number(point.x), y: Number(point.y) }));
     if (savedStroke.shape) stroke.shape = true;
+    if (typeof savedStroke.group === "string" && savedStroke.group) stroke.group = savedStroke.group;
     if (PlotterColor.isColor(savedStroke.color)) stroke.color = savedStroke.color;
     return stroke;
   }).filter((stroke) => stroke.length > 0);
@@ -604,6 +610,24 @@ function render() {
     ctx.globalAlpha = 0.45;
     ctx.setLineDash([5, 4]);
     for (const stroke of state.textPreview) drawStroke(stroke);
+    ctx.restore();
+  }
+  // Selection box with resize handles, like an image in a doc.
+  const box = groupBBox(selectionStrokes());
+  if (box) {
+    ctx.save();
+    ctx.strokeStyle = "#2563eb";
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([6, 4]);
+    ctx.strokeRect(box.minX * state.canvasWidth, box.minY * state.canvasHeight, (box.maxX - box.minX) * state.canvasWidth, (box.maxY - box.minY) * state.canvasHeight);
+    ctx.setLineDash([]);
+    for (const handle of selectionHandles()) {
+      ctx.fillStyle = "#ffffff";
+      ctx.strokeStyle = "#2563eb";
+      ctx.lineWidth = 1.5;
+      ctx.fillRect(handle.x - 5, handle.y - 5, 10, 10);
+      ctx.strokeRect(handle.x - 5, handle.y - 5, 10, 10);
+    }
     ctx.restore();
   }
 }
@@ -1295,6 +1319,211 @@ function markGalleryCopyEdited() {
   logLine("GALLERY", `working copy of ${state.galleryDrawing.id} changed; source drawing will not be updated`);
 }
 
+/* ---------- select tool: move/resize imported groups ---------- */
+
+// Each import (and each placed text block) tags its strokes with one
+// group id, so the select tool can grab the whole import as one object,
+// like an image in a doc. Ungrouped strokes select one at a time.
+function nextGroupId() {
+  state.importSeq += 1;
+  return `import-${Date.now().toString(36)}-${state.importSeq}`;
+}
+
+function groupBBox(strokes) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const stroke of strokes) for (const point of stroke) {
+    if (point.x < minX) minX = point.x;
+    if (point.x > maxX) maxX = point.x;
+    if (point.y < minY) minY = point.y;
+    if (point.y > maxY) maxY = point.y;
+  }
+  if (!Number.isFinite(minX)) return null;
+  return { minX, minY, maxX, maxY };
+}
+
+// The live selection, pruned to strokes still on the pane (undo/redo and
+// loads replace state.strokes, which would leave stale references).
+function selectionStrokes() {
+  state.selection = state.selection.filter((stroke) => state.strokes.includes(stroke));
+  return state.selection;
+}
+
+function clearSelection() {
+  state.selection = [];
+  state.selectDrag = null;
+}
+
+function selectStrokes(strokes) {
+  state.selection = strokes.filter((stroke) => state.strokes.includes(stroke));
+  state.selectDrag = null;
+  render();
+}
+
+function groupOf(stroke) {
+  return stroke.group ? state.strokes.filter((other) => other.group === stroke.group) : [stroke];
+}
+
+// Undo needs a deep copy here: a move/resize rewrites the selected
+// strokes' points in place, so the shallow slice snapshot() takes would
+// be mutated along with the live strokes.
+function snapshotDeep() {
+  state.undoStack.push(cloneStrokes(state.strokes));
+  if (state.undoStack.length > 50) state.undoStack.shift();
+  state.redoStack = [];
+}
+
+function distanceToStroke(point, stroke) {
+  let best = Infinity;
+  for (let i = 0; i < stroke.length; i++) {
+    const a = stroke[i];
+    const b = stroke[i + 1] || a;
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const lenSq = dx * dx + dy * dy;
+    const t = lenSq ? Math.max(0, Math.min(1, ((point.x - a.x) * dx + (point.y - a.y) * dy) / lenSq)) : 0;
+    const dist = Math.hypot(point.x - (a.x + dx * t), point.y - (a.y + dy * t));
+    if (dist < best) best = dist;
+  }
+  return best;
+}
+
+// Topmost stroke near the point (later strokes draw on top, so they win).
+function strokeAt(point) {
+  const threshold = 0.015;
+  for (let i = state.strokes.length - 1; i >= 0; i--) {
+    if (distanceToStroke(point, state.strokes[i]) <= threshold) return state.strokes[i];
+  }
+  return null;
+}
+
+// Selection handles in canvas pixels: corners scale both axes, edges one.
+function selectionHandles() {
+  const box = groupBBox(selectionStrokes());
+  if (!box) return [];
+  const { minX, minY, maxX, maxY } = box;
+  const x = (nx) => nx * state.canvasWidth, y = (ny) => ny * state.canvasHeight;
+  const midX = (minX + maxX) / 2, midY = (minY + maxY) / 2;
+  return [
+    { id: "nw", x: x(minX), y: y(minY) },
+    { id: "n", x: x(midX), y: y(minY) },
+    { id: "ne", x: x(maxX), y: y(minY) },
+    { id: "e", x: x(maxX), y: y(midY) },
+    { id: "se", x: x(maxX), y: y(maxY) },
+    { id: "s", x: x(midX), y: y(maxY) },
+    { id: "sw", x: x(minX), y: y(maxY) },
+    { id: "w", x: x(minX), y: y(midY) },
+  ];
+}
+
+function handleAt(screenPoint) {
+  for (const handle of selectionHandles()) {
+    if (Math.abs(screenPoint.x - handle.x) <= 8 && Math.abs(screenPoint.y - handle.y) <= 8) return handle.id;
+  }
+  return null;
+}
+
+function handleCursor(handle) {
+  return { nw: "nwse-resize", se: "nwse-resize", ne: "nesw-resize", sw: "nesw-resize", n: "ns-resize", s: "ns-resize", e: "ew-resize", w: "ew-resize" }[handle] || "move";
+}
+
+// Start a move (handle null) or resize drag. The drag replays from the
+// strokes as they were when the drag started, so every pointermove is an
+// exact transform of the original, not an accumulation of deltas.
+function beginSelectDrag(point, handle) {
+  const strokes = selectionStrokes();
+  const box = groupBBox(strokes);
+  if (!box) return false;
+  // Snapshot here, not in the caller: every drag starts from a deep
+  // copy of the pre-drag pane, so undo restores it exactly.
+  snapshotDeep();
+  state.selectDrag = {
+    handle,
+    startPoint: point,
+    box,
+    // Anchor is the corner/edge opposite the grabbed handle; a move has
+    // no anchor. Kept in mm so a corner resize keeps the artwork's
+    // aspect on a non-square bed.
+    anchor: handle ? resizeAnchor(box, handle) : null,
+    orig: strokes.map((stroke) => stroke.map((p) => ({ x: p.x, y: p.y }))),
+  };
+  return true;
+}
+
+function resizeAnchor(box, handle) {
+  const { minX, minY, maxX, maxY } = box;
+  const { width, height } = dimensions();
+  const ax = handle.includes("w") ? maxX : handle.includes("e") ? minX : (minX + maxX) / 2;
+  const ay = handle.includes("n") ? maxY : handle.includes("s") ? minY : (minY + maxY) / 2;
+  return { x: ax * width, y: ay * height };
+}
+
+function updateSelectDrag(point) {
+  const drag = state.selectDrag;
+  if (!drag) return;
+  const strokes = selectionStrokes();
+  const { width, height } = dimensions();
+  let dx = 0, dy = 0, sx = 1, sy = 1;
+  if (!drag.handle) {
+    // Move, clamped so the whole group stays on the bed.
+    dx = Math.max(-drag.box.minX, Math.min(1 - drag.box.maxX, point.x - drag.startPoint.x));
+    dy = Math.max(-drag.box.minY, Math.min(1 - drag.box.maxY, point.y - drag.startPoint.y));
+  } else {
+    // Resize about the anchor, in mm. Corners scale uniformly (the axis
+    // that moved most wins); edges stretch one axis only. Clamped so the
+    // scaled box stays on the bed and never flips or vanishes.
+    const anchor = drag.anchor;
+    const px = point.x * width, py = point.y * height;
+    const boxMm = { minX: drag.box.minX * width, maxX: drag.box.maxX * width, minY: drag.box.minY * height, maxY: drag.box.maxY * height };
+    const axisScale = (pointer, anchorValue, low, high) => {
+      if (anchorValue === low) return (pointer - anchorValue) / (high - anchorValue);
+      if (anchorValue === high) return (anchorValue - pointer) / (anchorValue - low);
+      return 1;
+    };
+    const rawSx = axisScale(px, anchor.x, boxMm.minX, boxMm.maxX);
+    const rawSy = axisScale(py, anchor.y, boxMm.minY, boxMm.maxY);
+    const clampScale = (s, anchorValue, low, high, sizeMm) => {
+      const span = anchorValue === low ? high - anchorValue : anchorValue - low;
+      const room = anchorValue === low ? sizeMm - anchorValue : anchorValue;
+      return Math.max(0.05, Math.min(10, s, span > 0 ? room / span : 10));
+    };
+    if (drag.handle.length === 2) {
+      const s = Math.abs(rawSx - 1) >= Math.abs(rawSy - 1) ? rawSx : rawSy;
+      sx = clampScale(s, anchor.x, boxMm.minX, boxMm.maxX, width);
+      sy = clampScale(s, anchor.y, boxMm.minY, boxMm.maxY, height);
+    } else if (drag.handle === "e" || drag.handle === "w") {
+      sx = clampScale(rawSx, anchor.x, boxMm.minX, boxMm.maxX, width);
+    } else {
+      sy = clampScale(rawSy, anchor.y, boxMm.minY, boxMm.maxY, height);
+    }
+  }
+  strokes.forEach((stroke, index) => {
+    const orig = drag.orig[index];
+    for (let i = 0; i < stroke.length; i++) {
+      const ox = orig[i].x * width, oy = orig[i].y * height;
+      const nx = drag.handle ? drag.anchor.x + (ox - drag.anchor.x) * sx : ox + dx * width;
+      const ny = drag.handle ? drag.anchor.y + (oy - drag.anchor.y) * sy : oy + dy * height;
+      stroke[i].x = Math.max(0, Math.min(1, nx / width));
+      stroke[i].y = Math.max(0, Math.min(1, ny / height));
+    }
+  });
+}
+
+function endSelectDrag() {
+  state.selectDrag = null;
+  render();
+  updateUi();
+}
+
+function deleteSelection() {
+  const strokes = selectionStrokes();
+  if (!strokes.length) return;
+  snapshotDeep();
+  markGalleryCopyEdited();
+  state.strokes = state.strokes.filter((stroke) => !strokes.includes(stroke));
+  clearSelection();
+  render();
+  updateUi();
+}
+
 function addPoint(event) {
   const point = normalizedEventPoint(event);
   const last = state.activeStroke[state.activeStroke.length - 1];
@@ -1589,10 +1818,13 @@ function fillAt(point) {
 }
 
 function setDrawingTool(tool) {
-  if (!["pencil", "line", "rectangle", "ellipse", "fill", "eraser", "text"].includes(tool)) return;
+  if (!["select", "pencil", "line", "rectangle", "ellipse", "fill", "eraser", "text"].includes(tool)) return;
   state.drawingTool = tool;
   state.textPreview = null;
   state.textPreviewPoint = null;
+  const hadSelection = state.selection.length > 0;
+  clearSelection();
+  canvas.style.cursor = "";
   plottingBed.classList.toggle("using-eraser", tool === "eraser");
   $("#textOptions").classList.toggle("hidden", tool !== "text");
   for (const button of $$('[data-drawing-tool]')) {
@@ -1600,6 +1832,7 @@ function setDrawingTool(tool) {
     button.classList.toggle("active", active);
     button.setAttribute("aria-pressed", String(active));
   }
+  if (hadSelection) render();
   logLine("DRAW", `tool=${tool}`);
 }
 
@@ -1609,6 +1842,26 @@ canvas.addEventListener("pointerdown", (event) => {
   event.preventDefault();
   canvas.setPointerCapture(event.pointerId);
   const point = normalizedEventPoint(event);
+  if (state.drawingTool === "select") {
+    const bounds = canvas.getBoundingClientRect();
+    const screenPoint = { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
+    const handle = handleAt(screenPoint);
+    if (handle) {
+      markGalleryCopyEdited();
+      if (beginSelectDrag(point, handle)) { canvas.style.cursor = handleCursor(handle); render(); }
+      return;
+    }
+    const hit = strokeAt(point);
+    if (hit) {
+      if (!selectionStrokes().includes(hit)) selectStrokes(groupOf(hit));
+      markGalleryCopyEdited();
+      if (beginSelectDrag(point, null)) { canvas.style.cursor = "move"; render(); }
+      return;
+    }
+    clearSelection();
+    render();
+    return;
+  }
   if (state.drawingTool === "eraser") {
     state.eraserStartStrokes = state.strokes;
     state.eraserLastPoint = point;
@@ -1628,6 +1881,8 @@ canvas.addEventListener("pointerdown", (event) => {
     if (!text.trim()) { showToast("Type some text first.", "error"); return; }
     const strokes = textPreviewStrokes(point);
     if (!strokes) { showToast("Nothing to place.", "error"); return; }
+    const textGroup = nextGroupId();
+    for (const stroke of strokes) stroke.group = textGroup;
     state.textPreview = null;
     state.textPreviewPoint = null;
     snapshot();
@@ -1646,6 +1901,19 @@ canvas.addEventListener("pointerdown", (event) => {
 });
 
 canvas.addEventListener("pointermove", (event) => {
+  if (state.selectDrag) {
+    event.preventDefault();
+    updateSelectDrag(normalizedEventPoint(event));
+    render();
+    return;
+  }
+  // Select tool: hover cursor shows what a click would do.
+  if (state.drawingTool === "select" && !state.activeStroke) {
+    const bounds = canvas.getBoundingClientRect();
+    const handle = handleAt({ x: event.clientX - bounds.left, y: event.clientY - bounds.top });
+    canvas.style.cursor = handle ? handleCursor(handle) : strokeAt(normalizedEventPoint(event)) ? "move" : "";
+    return;
+  }
   if (state.eraserStartStrokes) {
     event.preventDefault();
     const coalesced = event.getCoalescedEvents ? event.getCoalescedEvents() : [];
@@ -1674,6 +1942,11 @@ canvas.addEventListener("pointermove", (event) => {
 });
 
 function finishStroke(event) {
+  if (state.selectDrag) {
+    if (event && canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+    endSelectDrag();
+    return;
+  }
   if (state.eraserStartStrokes) {
     finishErasing(event);
     return;
@@ -1715,6 +1988,7 @@ for (const input of [$("#textInput"), $("#textFont"), $("#textSize")]) {
 function undo() {
   if (!state.undoStack.length) return;
   markGalleryCopyEdited();
+  clearSelection();
   state.redoStack.push(state.strokes);
   state.strokes = state.undoStack.pop();
   render();
@@ -1724,6 +1998,7 @@ function undo() {
 function redo() {
   if (!state.redoStack.length) return;
   markGalleryCopyEdited();
+  clearSelection();
   state.undoStack.push(state.strokes);
   state.strokes = state.redoStack.pop();
   render();
@@ -1734,6 +2009,7 @@ function clearDrawing() {
   if (!state.strokes.length) return;
   snapshot();
   markGalleryCopyEdited();
+  clearSelection();
   state.strokes = [];
   setSquiggleSource(null);
   render();
@@ -2569,6 +2845,7 @@ function openGalleryDrawing(drawing) {
   squigglePanel.classList.add("hidden");
   state.galleryDrawing = { ...drawing };
   state.galleryCopyDirty = false;
+  clearSelection();
   state.strokes = deserializeStrokes(drawing.strokes);
   state.undoStack = [];
   state.redoStack = [];
@@ -2742,8 +3019,10 @@ window.addEventListener("keydown", (event) => {
   if (!$("#saveDrawingModal").classList.contains("hidden")) return;
   const target = event.target;
   if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable)) return;
-  const toolKeys = { p: "pencil", l: "line", r: "rectangle", e: "ellipse", f: "fill", x: "eraser", t: "text" };
+  const toolKeys = { v: "select", p: "pencil", l: "line", r: "rectangle", e: "ellipse", f: "fill", x: "eraser", t: "text" };
   const key = event.key.toLowerCase();
+  if (key === "escape") { if (state.selection.length) { clearSelection(); render(); } return; }
+  if ((key === "delete" || key === "backspace") && state.drawingTool === "select") { deleteSelection(); return; }
   if (toolKeys[key]) { setDrawingTool(toolKeys[key]); return; }
   if (/^[1-8]$/.test(key)) {
     activeMarker = Number(key) - 1;
@@ -2776,12 +3055,14 @@ $("#goPremade").addEventListener("click", () => showView("premade"));
 $("#backFromDraw").addEventListener("click", () => {
   if (state.galleryDrawing) {
     clearGalleryDrawing();
+    clearSelection();
     state.strokes = [];
     showView("premade");
     updateUi();
   } else if (state.premadeSource) {
     setSquiggleSource(null);
     state.premadeSource = null;
+    clearSelection();
     state.strokes = [];
     state.undoStack = [];
     state.redoStack = [];
@@ -3007,7 +3288,13 @@ for (const selector of ["#goSvg", "#importSvgButton"]) {
 }
 // Shared by SVG file import and photo-to-sketch conversion: load SVG text
 // through the same import path (colour matching, bed fit, undo snapshot).
-async function importSvgText(text, name) {
+// File imports are additive (`{ additive: true }`): they land on top of
+// whatever is already on the pane instead of clearing it, so several SVGs
+// can be collaged. A later import is shrunk to 60% of the bed and nudged
+// along a cascade, so it stays visible on top of the previous layer and
+// can be dragged/resized with the select tool. The first import on an
+// empty pane still fills the bed, as before. Photo conversion replaces.
+async function importSvgText(text, name, options = {}) {
   const { width: bedWidth, height: bedHeight } = dimensions();
   const importProgress = $("#importProgress");
   // importSvg yields between chunks, so this stays live on big files
@@ -3016,19 +3303,34 @@ async function importSvgText(text, name) {
     importProgress.textContent = total > 0 ? `${label}… ${Math.round((done / total) * 100)}%` : `${label}…`;
     importProgress.classList.remove("hidden");
   };
-  const strokes = PlotterColor.fitToBed(await PlotterColor.importSvg(text, svgFillStrokes, onProgress), bedWidth, bedHeight);
+  const imported = PlotterColor.fitToBed(await PlotterColor.importSvg(text, svgFillStrokes, onProgress), bedWidth, bedHeight);
+  const groupId = nextGroupId();
+  for (const stroke of imported) stroke.group = groupId;
   // Replace the current artwork only after the complete import succeeds.
   snapshot();
   setSquiggleSource(null);
-  clearGalleryDrawing();
-  state.premadeSource = name;
-  state.strokes = strokes;
+  const additive = options.additive === true && state.strokes.length > 0;
+  if (additive) {
+    const step = (state.importSeq % 4) * 0.05;
+    for (const stroke of imported) for (const point of stroke) {
+      point.x = 0.5 + (point.x - 0.5) * 0.6 + step;
+      point.y = 0.5 + (point.y - 0.5) * 0.6 + step;
+    }
+    markGalleryCopyEdited();
+    state.premadeSource = null;
+    state.strokes = state.strokes.concat(imported);
+  } else {
+    clearGalleryDrawing();
+    state.premadeSource = name;
+    state.strokes = imported;
+  }
   state.activeStroke = null;
-  setDrawingTool("pencil");
+  setDrawingTool("select");
+  selectStrokes(imported);
   showView("draw");
   render(); updateUi();
-  const tools = new Set(strokes.map(toolForStroke));
-  showToast(`Imported ${name} — ${strokes.length} paths, ${tools.size} markers`);
+  const tools = new Set(imported.map(toolForStroke));
+  showToast(`${additive ? "Added" : "Imported"} ${name} — ${imported.length} paths, ${tools.size} markers`);
   // NOTE: this does not hide #importProgress. The caller hides it last,
   // after re-enabling its own buttons, so the progress line's final
   // mutation happens with the buttons already restored (the browser
@@ -3041,7 +3343,7 @@ $("#svgFile").addEventListener("change", async (event) => {
   $("#importSvgButton").disabled = true;
   $("#goSvg").disabled = true;
   try {
-    await importSvgText(await file.text(), file.name);
+    await importSvgText(await file.text(), file.name, { additive: true });
   } catch (error) {
     showToast(error.message || "Could not import this SVG.", "error");
   } finally {
