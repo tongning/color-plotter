@@ -219,6 +219,27 @@ document.querySelector('#app').onload = async ({ target }) => {
       evaluate('state.strokes = window.testFillStrokes; render(); updateUi();');
       check(w.generateGcode().includes('T-1'), 'Sample SVG imports and generates a complete plot job');
     }
+    // A stroke clipped by a later opaque fill comes back as pieces that
+    // share a split id, so the job lifts instead of linking across the fill.
+    paths = await convert(svg('<path d="M0 50H100" stroke="red" fill="none"/><rect x="45" y="0" width="10" height="100" fill="blue"/>'));
+    const redPieces = paths.filter((p) => p.color === '#ff0000');
+    check(redPieces.length === 2 && redPieces[0].splitIds && redPieces[0].splitIds[0] === redPieces[1].splitIds[0], 'A stroke clipped by a later fill comes back as pieces sharing a split id');
+    // Two same-colour strokes that touch still link without lifting; the
+    // same pair sharing a split id lifts instead; a tool change never links.
+    const touchPair = (withSplit, secondColor) => evaluate(`(function () {
+      const a = Object.assign([{x:.1,y:.5},{x:.2,y:.5}], {color:'#e42e2a', shape:true});
+      const b = Object.assign([{x:.205,y:.5},{x:.3,y:.5}], {color:'${secondColor}', shape:true});
+      if (${withSplit}) { a.splitIds = ['hlr-1']; b.splitIds = ['hlr-1']; }
+      state.strokes = [a, b]; return generateGcode();
+    })()`);
+    check(touchPair(false, '#e42e2a').includes('(connected)'), 'Two same-colour strokes that touch still link without lifting');
+    check(!touchPair(true, '#e42e2a').includes('(connected)'), 'Pieces split from one line lift instead of linking across the gap');
+    check(!touchPair(false, '#2d4e9e').includes('(connected)'), 'A tool change never links across colours');
+    // Eraser fragments share a split id too: the erased gap stays empty.
+    const erased = evaluate(`eraseStrokeAt(Object.assign([{x:.1,y:.1},{x:.8,y:.1}], {color:'#e42e2a', shape:true}), {x:.4,y:.1})`);
+    check(erased.length === 2 && erased[0].splitIds && erased[0].splitIds[0] === erased[1].splitIds[0], 'Eraser fragments share a split id');
+    evaluate(`state.strokes = [Object.assign([{x:.1,y:.5},{x:.2,y:.5}], {color:'#e42e2a', shape:true, splitIds:['hlr-1']}), Object.assign([{x:.205,y:.5},{x:.3,y:.5}], {color:'#e42e2a', shape:true, splitIds:['hlr-1']})];`);
+    check(evaluate(`deserializeStrokes(serializeStrokes(state.strokes))[0].splitIds[0]`) === 'hlr-1', 'Split ids survive gallery serialization round trip');
     delete w.testFillStrokes;
     output.textContent = results.join('\n');
     document.body.dataset.testResult = 'passed';

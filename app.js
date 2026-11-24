@@ -28,9 +28,30 @@ const CONNECT_MAX_MM = 0.75;
 
 // True when the pen can stay down between two strokes: it is already down,
 // and the next stroke starts within CONNECT_MAX_MM of where the pen is.
-// (The caller also requires the same marker; a tool change always lifts.)
+// The caller also requires the same tool and no shared split id: a tool
+// change always lifts, and pieces cut from one line share a split id
+// whose gap is occluded, off the bed, or erased.
 function canConnect(penIsDown, penPosition, nextStart) {
   return penIsDown && !!penPosition && distance(penPosition, nextStart) <= CONNECT_MAX_MM;
+}
+
+// A split id marks pieces cut from one line by clipping or erasing: the
+// gap between them is occluded, off the bed, or erased, so the pen must
+// lift instead of drawing a link across it. Pieces share the id of the
+// cut that separated them; the prefix keeps each cutter's ids distinct
+// from the import's "hlr-" ids.
+let splitSeq = 0;
+function tagSplitPieces(pieces, prefix) {
+  if (pieces.length < 2) return pieces;
+  const id = `${prefix}-${++splitSeq}`;
+  for (const piece of pieces) {
+    if (!piece.splitIds) piece.splitIds = [];
+    piece.splitIds.push(id);
+  }
+  return pieces;
+}
+function sharesSplit(a, b) {
+  return !!a && !!b && !!a.splitIds && !!b.splitIds && a.splitIds.some((id) => b.splitIds.includes(id));
 }
 const JOB_START = ["M280 P0 S150", "G4 P60", "G28 ; home axes with the pen lifted"];
 // The end of the job is built in generateGcode (it needs the bed height for
@@ -457,6 +478,7 @@ function cloneStroke(stroke) {
   if (stroke.squiggle) copy.squiggle = true;
   if (stroke.group) copy.group = stroke.group;
   if (PlotterColor.isColor(stroke.color)) copy.color = stroke.color;
+  if (stroke.splitIds) copy.splitIds = [...stroke.splitIds];
   return copy;
 }
 
@@ -470,6 +492,7 @@ function serializeStrokes(strokes) {
     shape: Boolean(stroke.shape),
     ...(stroke.group ? { group: stroke.group } : {}),
     ...(PlotterColor.isColor(stroke.color) ? { color: stroke.color } : {}),
+    ...(Array.isArray(stroke.splitIds) && stroke.splitIds.length ? { splitIds: [...stroke.splitIds] } : {}),
   }));
 }
 
@@ -480,6 +503,10 @@ function deserializeStrokes(strokes) {
     if (savedStroke.shape) stroke.shape = true;
     if (typeof savedStroke.group === "string" && savedStroke.group) stroke.group = savedStroke.group;
     if (PlotterColor.isColor(savedStroke.color)) stroke.color = savedStroke.color;
+    if (Array.isArray(savedStroke.splitIds)) {
+      const ids = savedStroke.splitIds.filter((id) => typeof id === "string");
+      if (ids.length) stroke.splitIds = ids;
+    }
     return stroke;
   }).filter((stroke) => stroke.length > 0);
 }
@@ -805,6 +832,7 @@ function gcodeFingerprint() {
     if (stroke.color) for (const c of stroke.color) mix(c.charCodeAt(0));
     if (stroke.shape) mix(1);
     if (stroke.squiggle) mix(2);
+    if (stroke.splitIds) for (const id of stroke.splitIds) for (const c of id) mix(c.charCodeAt(0));
     for (const p of stroke) { mix(Math.round(p.x * 1e6)); mix(Math.round(p.y * 1e6)); }
   }
   return h >>> 0;
@@ -820,13 +848,17 @@ function clipStrokeToBed(stroke) {
     const p = stroke[0];
     return p.x >= 0 && p.x <= 1 && p.y >= 0 && p.y <= 1 ? [stroke] : [];
   }
-  return PlotterColor.clipPolyline(stroke).map((piece) => {
+  const pieces = PlotterColor.clipPolyline(stroke).map((piece) => {
     if (stroke.shape) piece.shape = true;
     if (stroke.squiggle) piece.squiggle = true;
     if (stroke.group) piece.group = stroke.group;
     if (PlotterColor.isColor(stroke.color)) piece.color = stroke.color;
+    if (stroke.splitIds) piece.splitIds = [...stroke.splitIds];
     return piece;
   });
+  // A stroke the bed clips into pieces leaves an off-bed gap between
+  // them; tag the pieces so the job lifts instead of linking across it.
+  return tagSplitPieces(pieces, "bed");
 }
 
 function generateGcode() {
@@ -865,6 +897,7 @@ function generateGcode() {
   let penPosition = null;
   let selectedTool = null;
   let penIsDown = false;
+  let prevStroke = null;
   // The feedrate is modal: emit it only when it changes (travel <-> draw),
   // not on every line. Repeating F on every short segment bloats the job
   // and starves the planner, which is what makes curves sound choppy.
@@ -884,6 +917,7 @@ function generateGcode() {
       selectedTool = tool;
       penPosition = null; // tool-change macros may move the carriage
       penIsDown = false;
+      prevStroke = null;
     }
     let stroke = plotReadyStroke(originalStroke);
     // Start each stroke at whichever end is nearer the pen, instead of always
@@ -899,8 +933,11 @@ function generateGcode() {
     // When the next stroke starts very close to where the pen is, keep the
     // pen down and draw a short link to it instead of lifting, travelling,
     // and lowering. The link is sub-millimetre, so it hides under the pen's
-    // own width at the joints.
-    if (canConnect(penIsDown, penPosition, first)) {
+    // own width at the joints. Never link across a tool change — a
+    // different colour — or across a split: pieces cut from one line share
+    // a split id, and the gap between them is occluded, off the bed, or
+    // erased, so the pen lifts instead.
+    if (tool === selectedTool && !sharesSplit(prevStroke, originalStroke) && canConnect(penIsDown, penPosition, first)) {
       lines.push(`; stroke ${index + 1} (connected)`);
       lines.push(`G1 X${formatMm(first.x, 4)} Y${formatMm(first.y, 4)}${feedSuffix(draw)}`);
     } else {
@@ -939,6 +976,7 @@ function generateGcode() {
       cur = move.to;
     }
     penPosition = mmPoints[mmPoints.length - 1];
+    prevStroke = originalStroke;
     // The pen stays down here; the next stroke decides whether to connect
     // to it or lift, and the end of the job lifts it.
   });
@@ -1740,7 +1778,9 @@ function eraseStrokeAt(stroke, center) {
     if (stroke.squiggle) piece.squiggle = true;
     if (PlotterColor.isColor(stroke.color)) piece.color = stroke.color;
   }
-  return pieces;
+  // The erased gap between fragments stays empty: tag them so the job
+  // lifts instead of linking across where the user erased.
+  return tagSplitPieces(pieces, "erase");
 }
 
 function eraseAt(point) {

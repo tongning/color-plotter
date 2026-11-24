@@ -45,7 +45,8 @@ test('generateGcode lifts before a tool change and at the end of the job', () =>
   // silently drop the final lift or the tool-change lift.
   assert.ok(src.includes('if (penIsDown) penUp(lines);'), 'tool-change lift guarded by penIsDown');
   assert.ok(src.includes('if (penIsDown) penUp(lines);\n\n  // End of job:'), 'final lift before the end-of-job sequence');
-  assert.ok(src.includes('if (canConnect(penIsDown, penPosition, first))'), 'stroke loop uses canConnect');
+  assert.ok(src.includes('canConnect(penIsDown, penPosition, first)'), 'stroke loop uses canConnect');
+  assert.ok(src.includes('tool === selectedTool && !sharesSplit(prevStroke, originalStroke) && canConnect(penIsDown, penPosition, first)'), 'stroke loop links only same-tool strokes that share no split id');
 });
 
 test('the end of the job parks top-left instead of homing', () => {

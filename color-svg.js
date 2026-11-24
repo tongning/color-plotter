@@ -34,6 +34,20 @@
     return best;
   }
 
+  let splitSeq = 0;
+  // Pieces cut from one outline share a split id: the gap between them is
+  // occluded or off the bed, so the G-code must lift instead of drawing a
+  // no-lift link across it. The "hlr-" prefix keeps these ids distinct
+  // from the bed-clip and eraser ids the app mints.
+  function tagSplitPieces(pieces) {
+    if (pieces.length < 2) return;
+    const id = `hlr-${++splitSeq}`;
+    for (const piece of pieces) {
+      if (!piece.splitIds) piece.splitIds = [];
+      piece.splitIds.push(id);
+    }
+  }
+
   // Keep compound-path moves separate, including relative moves following a close.
   // Otherwise getPointAtLength would draw a connector between independent paths.
   function splitPath(data) {
@@ -333,8 +347,9 @@
             // endpoints ~0.4px past the true edge, outside the outline.
             const hatched = fillStrokes(mask, item.outlines, alpha, 127);
             for (const path of hatched) {
-              if (hasOccluder) for (const vis of clipAgainstMask(path, occluder)) addToOut(vis, item.fill);
-              else addToOut(path, item.fill);
+              const pieces = hasOccluder ? clipAgainstMask(path, occluder) : [path];
+              tagSplitPieces(pieces);
+              for (const piece of pieces) addToOut(piece, item.fill);
             }
             // A fill's outer perimeter gives the fill its form: without
             // it the hatch ends ragged at the edge and the shape reads
@@ -348,20 +363,26 @@
             // fills get no outline either — there is no white pen.
             if (!item.stroke && hatched.hasSolid) {
               for (const points of item.outlines) {
+                const pieces = [];
                 for (const piece of clipPolyline(closeLoop(points))) {
-                  if (hasOccluder) for (const vis of clipAgainstMask(piece, occluder)) addToOut(vis, item.fill);
-                  else addToOut(piece, item.fill);
+                  if (hasOccluder) pieces.push(...clipAgainstMask(piece, occluder));
+                  else pieces.push(piece);
                 }
+                tagSplitPieces(pieces);
+                for (const piece of pieces) addToOut(piece, item.fill);
               }
             }
           }
         }
         if (item.stroke) {
           for (const points of item.outlines) {
+            const pieces = [];
             for (const piece of clipPolyline(points)) {
-              if (hasOccluder) for (const vis of clipAgainstMask(piece, occluder)) addToOut(vis, item.stroke);
-              else addToOut(piece, item.stroke);
+              if (hasOccluder) pieces.push(...clipAgainstMask(piece, occluder));
+              else pieces.push(piece);
             }
+            tagSplitPieces(pieces);
+            for (const piece of pieces) addToOut(piece, item.stroke);
           }
         }
         if (mask && area > 0 && item.fillOpacity >= 0.9) {
