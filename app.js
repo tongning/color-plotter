@@ -3486,6 +3486,7 @@ $("#photoConvert").addEventListener("click", async () => {
         image,
         detail: $("#photoDetail").checked,
         dramatic: $("#photoDramatic").checked,
+        adaptive: $("#photoAdaptive").checked,
         shading: $("#photoShading").value,
         density: Number($("#photoDensity").value),
       }),

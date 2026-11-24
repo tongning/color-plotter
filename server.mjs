@@ -22,7 +22,7 @@ const PHOTO_SKETCH_SCRIPT = process.env.PHOTO_SKETCH_SCRIPT || "/home/hatch/work
 const PHOTO_SKETCH_TIMEOUT_MS = 60_000;
 const MAX_PHOTO_BODY_BYTES = 15 * 1024 * 1024;
 const TMP_DIR = join(DATA_DIR, "tmp");
-const SHADING_MODES = ["off", "gradient", "cross", "hybrid", "plotcaster", "squiggle"];
+const SHADING_MODES = ["off", "gradient", "cross", "hybrid", "plotcaster", "squiggle", "tsp"];
 
 const MIME_TYPES = {
   ".css": "text/css; charset=utf-8",
@@ -275,11 +275,12 @@ async function handleApi(request, response, url) {
     if (!match) throw httpError(400, "image must be a JPEG or PNG data URL.");
     const detail = input.detail === true;
     const dramatic = input.dramatic === true;
+    const adaptive = input.adaptive !== false;
     const shading = typeof input.shading === "string" ? input.shading : "off";
-    if (!SHADING_MODES.includes(shading)) throw httpError(400, "shading must be off, gradient, cross, hybrid, plotcaster or squiggle.");
+    if (!SHADING_MODES.includes(shading)) throw httpError(400, "shading must be off, gradient, cross, hybrid, plotcaster, squiggle or tsp.");
     const density = typeof input.density === "number" && isFinite(input.density)
       ? input.density : 1;
-    if (density < 0.5 || density > 3) throw httpError(400, "density must be between 0.5 and 3.");
+    if (density < 0.5 || density > 5) throw httpError(400, "density must be between 0.5 and 5.");
     const support = await getPhotoSketchSupport();
     if (!support.available) throw httpError(503, "Photo sketch is not set up on this server: the converter is missing.");
     if (shading !== "off" && !support.shading) throw httpError(400, "The installed converter does not support shading yet.");
@@ -295,6 +296,7 @@ async function handleApi(request, response, url) {
       const args = [PHOTO_SKETCH_SCRIPT, inputPath, "-o", outputPath];
       if (detail) args.push("--detail");
       if (dramatic) args.push("--dramatic");
+      if (!adaptive) args.push("--no-adaptive-smoothing");
       if (shading !== "off") args.push("--shading", shading);
       if (density !== 1) args.push("--density", String(density));
       let run;

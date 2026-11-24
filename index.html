@@ -163,6 +163,11 @@
             <span class="toggle-ui" aria-hidden="true"></span>
             <span>Dramatic shading</span>
           </label>
+          <label class="toggle-row" for="photoAdaptive">
+            <input id="photoAdaptive" type="checkbox" checked />
+            <span class="toggle-ui" aria-hidden="true"></span>
+            <span>Adaptive smoothing</span>
+          </label>
           <label class="photo-shading-label" for="photoShading">Shading
             <select id="photoShading" class="mod-select">
               <option value="off" selected>Off</option>
@@ -171,6 +176,7 @@
               <option value="hybrid">Hybrid (gradient + flow)</option>
               <option value="plotcaster">Plotcaster flow</option>
               <option value="squiggle">Wave squiggle</option>
+              <option value="tsp">TSP tour</option>
             </select>
           </label>
           <label class="photo-shading-label" for="photoDensity">Density
@@ -178,7 +184,9 @@
               <option value="1" selected>Normal</option>
               <option value="1.5">Dense</option>
               <option value="2">Very dense</option>
-              <option value="3">Max (near-full page)</option>
+              <option value="3">Extra dense</option>
+              <option value="4">Extreme</option>
+              <option value="5">Max (near-full page)</option>
             </select>
           </label>
           <div class="sq-reset-row"><button id="photoConvert" type="button">Convert</button></div>
