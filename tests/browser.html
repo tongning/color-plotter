@@ -148,28 +148,28 @@ document.querySelector('#app').onload = async ({ target }) => {
     check(evaluate('state.drawingTool') === 'select' && evaluate('state.selection.length') > 0, 'New import is selected with the select tool');
     const addedGroup = evaluate('state.strokes[state.strokes.length - 1].group');
     const addedBox = evaluate('groupBBox(state.selection)');
-    check(addedBox.maxX - addedBox.minX > 0.55 && addedBox.maxX - addedBox.minX < 0.65, 'Later imports land at 60% of the bed, visible on top');
+    check(addedBox.maxX - addedBox.minX > 0.99 && addedBox.maxY - addedBox.minY > 0.99, 'Every import lands full-bed, stacked on top of the last');
+    // A full-bed import has no room to move, so shrink it first: corner
+    // resize scales the import about the opposite corner.
+    w.beginSelectDrag({ x: addedBox.maxX, y: addedBox.maxY }, 'se');
+    w.updateSelectDrag({ x: addedBox.maxX - 0.2, y: addedBox.maxY - 0.2 });
+    w.endSelectDrag();
+    const resizedBox = evaluate('groupBBox(state.selection)');
+    check(Math.abs(resizedBox.maxX - 0.8) < 0.01 && Math.abs(resizedBox.maxY - 0.8) < 0.01 && Math.abs(resizedBox.minX - addedBox.minX) < 0.001, 'Corner resize scales the import about the opposite corner');
     // Select drag moves the whole import by the pointer delta and leaves
     // the first import untouched.
     const beforeMove = JSON.parse(evaluate('JSON.stringify(state.selection[0])'));
     const beforeFirst = evaluate('JSON.stringify(state.strokes[0])');
-    w.beginSelectDrag({ x: 0.6, y: 0.6 }, null);
-    w.updateSelectDrag({ x: 0.7, y: 0.65 });
+    w.beginSelectDrag({ x: 0.4, y: 0.4 }, null);
+    w.updateSelectDrag({ x: 0.5, y: 0.45 });
     w.endSelectDrag();
     const moved = JSON.parse(evaluate('JSON.stringify(state.selection[0])'));
     check(Math.abs(moved[0].x - beforeMove[0].x - 0.1) < 0.001 && Math.abs(moved[0].y - beforeMove[0].y - 0.05) < 0.001, 'Select drag moves the whole import by the pointer delta');
     check(evaluate('JSON.stringify(state.strokes[0])') === beforeFirst, 'Moving one import leaves the other import untouched');
-    // Corner resize scales the import about the opposite corner.
-    const movedBox = evaluate('groupBBox(state.selection)');
-    w.beginSelectDrag({ x: movedBox.maxX, y: movedBox.maxY }, 'se');
-    w.updateSelectDrag({ x: movedBox.maxX - 0.1, y: movedBox.maxY - 0.1 });
-    w.endSelectDrag();
-    const resizedBox = evaluate('groupBBox(state.selection)');
-    check(Math.abs(resizedBox.maxX - (movedBox.maxX - 0.1)) < 0.01 && Math.abs(resizedBox.maxY - (movedBox.maxY - 0.1)) < 0.01 && Math.abs(resizedBox.minX - movedBox.minX) < 0.001, 'Corner resize scales the import about the opposite corner');
-    // Undo restores the pre-resize position, from a deep snapshot.
+    // Undo restores the pre-move position, from a deep snapshot.
     w.undo();
     const undoneBox = evaluate('groupBBox(state.strokes.filter(s => s.group === "' + addedGroup + '"))');
-    check(Math.abs(undoneBox.minX - movedBox.minX) < 0.001 && Math.abs(undoneBox.maxX - movedBox.maxX) < 0.001 && Math.abs(undoneBox.maxY - movedBox.maxY) < 0.001, 'Undo restores the import after a resize');
+    check(Math.abs(undoneBox.minX - resizedBox.minX) < 0.001 && Math.abs(undoneBox.maxX - resizedBox.maxX) < 0.001 && Math.abs(undoneBox.maxY - resizedBox.maxY) < 0.001, 'Undo restores the import after a move');
     // Delete removes the selected import only.
     evaluate('setDrawingTool("select")');
     evaluate('selectStrokes(state.strokes.filter(s => s.group === state.strokes[state.strokes.length - 1].group))');

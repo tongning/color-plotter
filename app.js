@@ -94,7 +94,7 @@ const state = {
   premadeSource: null,
   selection: [], // strokes currently selected with the select tool
   selectDrag: null, // in-progress move/resize drag, or null
-  importSeq: 0, // counts imports, for the collage cascade offset
+  importSeq: 0, // counts imports, for unique group ids
   galleryDrawings: [],
   galleryDeleteMode: false,
   adminUnlocked: false,
@@ -3290,10 +3290,9 @@ for (const selector of ["#goSvg", "#importSvgButton"]) {
 // through the same import path (colour matching, bed fit, undo snapshot).
 // File imports are additive (`{ additive: true }`): they land on top of
 // whatever is already on the pane instead of clearing it, so several SVGs
-// can be collaged. A later import is shrunk to 60% of the bed and nudged
-// along a cascade, so it stays visible on top of the previous layer and
-// can be dragged/resized with the select tool. The first import on an
-// empty pane still fills the bed, as before. Photo conversion replaces.
+// can be collaged. Every import fits the full bed, first or not, stacked
+// exactly on top of the last — drag the top one away with the select tool
+// to get at the layer underneath. Photo conversion replaces.
 async function importSvgText(text, name, options = {}) {
   const { width: bedWidth, height: bedHeight } = dimensions();
   const importProgress = $("#importProgress");
@@ -3311,11 +3310,6 @@ async function importSvgText(text, name, options = {}) {
   setSquiggleSource(null);
   const additive = options.additive === true && state.strokes.length > 0;
   if (additive) {
-    const step = (state.importSeq % 4) * 0.05;
-    for (const stroke of imported) for (const point of stroke) {
-      point.x = 0.5 + (point.x - 0.5) * 0.6 + step;
-      point.y = 0.5 + (point.y - 0.5) * 0.6 + step;
-    }
     markGalleryCopyEdited();
     state.premadeSource = null;
     state.strokes = state.strokes.concat(imported);
