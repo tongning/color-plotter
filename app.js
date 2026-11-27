@@ -665,6 +665,38 @@ function render() {
       ctx.fillRect(handle.x - 5, handle.y - 5, 10, 10);
       ctx.strokeRect(handle.x - 5, handle.y - 5, 10, 10);
     }
+    // Rotation handle: a circle joined to the box by a line, with a
+    // curved arrow inside it.
+    const rot = rotationHandle();
+    if (rot) {
+      ctx.strokeStyle = "#2563eb";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(rot.x, rot.edgeY);
+      ctx.lineTo(rot.x, rot.y);
+      ctx.stroke();
+      ctx.fillStyle = "#ffffff";
+      ctx.beginPath();
+      ctx.arc(rot.x, rot.y, 7, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      // 270-degree clockwise arc, with an arrowhead at its end.
+      const r = 3.2, a0 = Math.PI * 0.5, a1 = Math.PI * 2;
+      ctx.beginPath();
+      ctx.arc(rot.x, rot.y, r, a0, a1);
+      ctx.stroke();
+      const ex = rot.x + r * Math.cos(a1), ey = rot.y + r * Math.sin(a1);
+      const tx = -Math.sin(a1), ty = Math.cos(a1);
+      const bx = ex - tx * 3, by = ey - ty * 3;
+      const px = -ty, py = tx;
+      ctx.fillStyle = "#2563eb";
+      ctx.beginPath();
+      ctx.moveTo(ex, ey);
+      ctx.lineTo(bx + px * 1.8, by + py * 1.8);
+      ctx.lineTo(bx - px * 1.8, by - py * 1.8);
+      ctx.closePath();
+      ctx.fill();
+    }
     ctx.restore();
   }
 }
@@ -1489,7 +1521,29 @@ function selectionHandles() {
   ];
 }
 
+// Rotation handle, PowerPoint-style: a circle above the top edge of the
+// selection, joined to it by a short line. Dragging it rotates the group
+// about the centre of its bounding box. If the box touches the top of
+// the bed there is no room above, so the handle flips below the box.
+function rotationHandle() {
+  const box = groupBBox(selectionStrokes());
+  if (!box) return null;
+  const midX = (box.minX + box.maxX) / 2;
+  const topY = box.minY * state.canvasHeight;
+  const bottomY = box.maxY * state.canvasHeight;
+  const above = topY >= 32;
+  return {
+    id: "rotate",
+    x: midX * state.canvasWidth,
+    y: above ? topY - 24 : bottomY + 24,
+    // Edge the connecting line attaches to.
+    edgeY: above ? topY : bottomY,
+  };
+}
+
 function handleAt(screenPoint) {
+  const rot = rotationHandle();
+  if (rot && Math.abs(screenPoint.x - rot.x) <= 9 && Math.abs(screenPoint.y - rot.y) <= 9) return "rotate";
   for (const handle of selectionHandles()) {
     if (Math.abs(screenPoint.x - handle.x) <= 8 && Math.abs(screenPoint.y - handle.y) <= 8) return handle.id;
   }
@@ -1497,12 +1551,14 @@ function handleAt(screenPoint) {
 }
 
 function handleCursor(handle) {
+  if (handle === "rotate") return "grab";
   return { nw: "nwse-resize", se: "nwse-resize", ne: "nesw-resize", sw: "nesw-resize", n: "ns-resize", s: "ns-resize", e: "ew-resize", w: "ew-resize" }[handle] || "move";
 }
 
-// Start a move (handle null) or resize drag. The drag replays from the
-// strokes as they were when the drag started, so every pointermove is an
-// exact transform of the original, not an accumulation of deltas.
+// Start a move (handle null), resize, or rotate drag. The drag replays
+// from the strokes as they were when the drag started, so every
+// pointermove is an exact transform of the original, not an accumulation
+// of deltas.
 function beginSelectDrag(point, handle) {
   const strokes = selectionStrokes();
   const box = groupBBox(strokes);
@@ -1510,14 +1566,22 @@ function beginSelectDrag(point, handle) {
   // Snapshot here, not in the caller: every drag starts from a deep
   // copy of the pre-drag pane, so undo restores it exactly.
   snapshotDeep();
+  const { width, height } = dimensions();
+  // Rotation pivots on the centre of the bounding box, in mm so the
+  // angle is true on screen even when the bed isn't square.
+  const pivot = handle === "rotate"
+    ? { x: ((box.minX + box.maxX) / 2) * width, y: ((box.minY + box.maxY) / 2) * height }
+    : null;
   state.selectDrag = {
     handle,
     startPoint: point,
     box,
     // Anchor is the corner/edge opposite the grabbed handle; a move has
-    // no anchor. Kept in mm so a corner resize keeps the artwork's
-    // aspect on a non-square bed.
-    anchor: handle ? resizeAnchor(box, handle) : null,
+    // no anchor, and a rotation pivots on the centre instead. Kept in mm
+    // so a corner resize keeps the artwork's aspect on a non-square bed.
+    anchor: handle && handle !== "rotate" ? resizeAnchor(box, handle) : null,
+    pivot,
+    startAngle: pivot ? Math.atan2(point.y * height - pivot.y, point.x * width - pivot.x) : 0,
     orig: strokes.map((stroke) => stroke.map((p) => ({ x: p.x, y: p.y }))),
   };
   return true;
@@ -1531,11 +1595,31 @@ function resizeAnchor(box, handle) {
   return { x: ax * width, y: ay * height };
 }
 
-function updateSelectDrag(point) {
+function updateSelectDrag(point, shift = false) {
   const drag = state.selectDrag;
   if (!drag) return;
   const strokes = selectionStrokes();
   const { width, height } = dimensions();
+  if (drag.handle === "rotate") {
+    // Rotate about the pivot, replayed from the drag-start points.
+    // Shift snaps the rotation to the nearest 15 degrees.
+    let delta = Math.atan2(point.y * height - drag.pivot.y, point.x * width - drag.pivot.x) - drag.startAngle;
+    delta = Math.atan2(Math.sin(delta), Math.cos(delta));
+    if (shift) {
+      const step = Math.PI / 12;
+      delta = Math.round(delta / step) * step;
+    }
+    const cos = Math.cos(delta), sin = Math.sin(delta);
+    strokes.forEach((stroke, index) => {
+      const orig = drag.orig[index];
+      for (let i = 0; i < stroke.length; i++) {
+        const ox = orig[i].x * width - drag.pivot.x, oy = orig[i].y * height - drag.pivot.y;
+        stroke[i].x = (drag.pivot.x + ox * cos - oy * sin) / width;
+        stroke[i].y = (drag.pivot.y + ox * sin + oy * cos) / height;
+      }
+    });
+    return;
+  }
   let dx = 0, dy = 0, sx = 1, sy = 1;
   if (!drag.handle) {
     // Move: the group may hang off the bed, as long as part of it stays
@@ -2003,7 +2087,7 @@ canvas.addEventListener("pointerdown", (event) => {
 canvas.addEventListener("pointermove", (event) => {
   if (state.selectDrag) {
     event.preventDefault();
-    updateSelectDrag(normalizedEventPoint(event));
+    updateSelectDrag(normalizedEventPoint(event), event.shiftKey);
     render();
     return;
   }

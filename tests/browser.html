@@ -170,6 +170,48 @@ document.querySelector('#app').onload = async ({ target }) => {
     w.undo();
     const undoneBox = evaluate('groupBBox(state.strokes.filter(s => s.group === "' + addedGroup + '"))');
     check(Math.abs(undoneBox.minX - resizedBox.minX) < 0.001 && Math.abs(undoneBox.maxX - resizedBox.maxX) < 0.001 && Math.abs(undoneBox.maxY - resizedBox.maxY) < 0.001, 'Undo restores the import after a move');
+    // Rotation: the rotate handle spins the import about the centre of
+    // its box. A 20-degree drag rotates freely; the same drag with Shift
+    // snaps to the nearest 15 degrees.
+    evaluate('setDrawingTool("select")');
+    evaluate('selectStrokes(state.strokes.filter(s => s.group === "' + addedGroup + '"))');
+    const rotBox = evaluate('groupBBox(state.selection)');
+    const pcx = (rotBox.minX + rotBox.maxX) / 2, pcy = (rotBox.minY + rotBox.maxY) / 2;
+    const beforeRot = JSON.parse(evaluate('JSON.stringify(state.selection[0])'));
+    const rotPt = (x, y, deg) => {
+      const a = deg * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
+      const ox = x - pcx, oy = y - pcy;
+      return [pcx + ox * c - oy * s, pcy + ox * s + oy * c];
+    };
+    const rotStart = { x: pcx, y: pcy - 0.3 };
+    const rot20 = { x: pcx + 0.3 * Math.cos(-70 * Math.PI / 180), y: pcy + 0.3 * Math.sin(-70 * Math.PI / 180) };
+    w.beginSelectDrag(rotStart, 'rotate');
+    w.updateSelectDrag(rot20);
+    w.endSelectDrag();
+    const rotated = JSON.parse(evaluate('JSON.stringify(state.selection[0])'));
+    const exp20 = rotPt(beforeRot[0].x, beforeRot[0].y, 20);
+    check(Math.abs(rotated[0].x - exp20[0]) < 0.01 && Math.abs(rotated[0].y - exp20[1]) < 0.01, 'Rotate handle spins the import about its centre by the dragged angle');
+    const rotGcode = w.generateGcode();
+    const rxs = [...rotGcode.matchAll(/X(-?[\d.]+)/g)].map(m => Number(m[1]));
+    const rys = [...rotGcode.matchAll(/Y(-?[\d.]+)/g)].map(m => Number(m[1]));
+    check(rxs.length > 0 && rxs.every(x => x >= 0 && x <= 118) && rys.every(y => y >= 0 && y <= 118), 'A rotated import still generates G-code clipped to the bed');
+    w.undo();
+    evaluate('selectStrokes(state.strokes.filter(s => s.group === "' + addedGroup + '"))');
+    w.beginSelectDrag(rotStart, 'rotate');
+    w.updateSelectDrag(rot20, true);
+    w.endSelectDrag();
+    const snapped = JSON.parse(evaluate('JSON.stringify(state.selection[0])'));
+    const exp15 = rotPt(beforeRot[0].x, beforeRot[0].y, 15);
+    check(Math.abs(snapped[0].x - exp15[0]) < 0.01 && Math.abs(snapped[0].y - exp15[1]) < 0.01, 'Holding Shift while rotating snaps to the nearest 15 degrees');
+    w.undo();
+    evaluate('selectStrokes(state.strokes.filter(s => s.group === "' + addedGroup + '"))');
+    w.beginSelectDrag(rotStart, 'rotate');
+    w.updateSelectDrag({ x: pcx + 0.3, y: pcy });
+    w.endSelectDrag();
+    const quarter = JSON.parse(evaluate('JSON.stringify(state.selection[0])'));
+    const exp90 = rotPt(beforeRot[0].x, beforeRot[0].y, 90);
+    check(Math.abs(quarter[0].x - exp90[0]) < 0.01 && Math.abs(quarter[0].y - exp90[1]) < 0.01, 'A 90-degree rotation moves the corner to the opposite side');
+    w.undo();
     // Off the page is allowed as long as part of it is on the page.
     evaluate('setDrawingTool("select")');
     evaluate('selectStrokes(state.strokes.filter(s => s.group === "' + addedGroup + '"))');
