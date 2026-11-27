@@ -256,9 +256,16 @@
         }
         if (hidden || opacity === 0 || style.visibility !== "visible") continue;
         if (style.strokeDasharray !== "none" || [style.markerStart, style.markerMid, style.markerEnd].some((v) => v && v !== "none")) throw new Error("Convert dashed strokes and arrow markers to paths before importing.");
+        // Match colours by their raw (fully opaque) value, not the
+        // opacity-blended one: a stroke-opacity below 1 is a preview
+        // rendering hint, and blending it over white before matching
+        // pulls light pens toward white and mis-maps them (a lime
+        // stroke at 0.85 opacity reads as a lighter green and can land
+        // on the wrong pen). Fully transparent strokes are still skipped.
         const fillOpacity = opacity * Number(style.fillOpacity);
-        const fill = element.localName === "line" ? null : colorOf(style.fill, fillOpacity);
-        const stroke = parseFloat(style.strokeWidth) > 0 ? colorOf(style.stroke, opacity * Number(style.strokeOpacity)) : null;
+        const fill = element.localName === "line" || fillOpacity <= 0 ? null : colorOf(style.fill, 1);
+        const strokeOpacity = opacity * Number(style.strokeOpacity);
+        const stroke = parseFloat(style.strokeWidth) > 0 && strokeOpacity > 0 ? colorOf(style.stroke, 1) : null;
         if (!fill && !stroke) continue;
         const matrix = element.getCTM();
         if (!matrix) continue;
